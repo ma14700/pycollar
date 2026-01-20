@@ -9,6 +9,22 @@ const { Header, Content } = Layout;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
+function calculateMA(dayCount, data) {
+  var result = [];
+  for (var i = 0, len = data.length; i < len; i++) {
+    if (i < dayCount - 1) {
+      result.push('-');
+      continue;
+    }
+    var sum = 0;
+    for (var j = 0; j < dayCount; j++) {
+      sum += data[i - j][1]; // close price
+    }
+    result.push((sum / dayCount).toFixed(2));
+  }
+  return result;
+}
+
 const App = () => {
   const [loading, setLoading] = useState(false);
   const [symbols, setSymbols] = useState([]);
@@ -93,6 +109,19 @@ const App = () => {
           };
       } else {
           // MA55BreakoutStrategy
+          const sizeMode = values.size_mode || 'atr_risk';
+          const fixedSize = values.fixed_size !== undefined ? parseInt(values.fixed_size) : 1;
+          const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
+
+          console.log('Form Values:', values);
+          console.log('Parsed Params:', { sizeMode, fixedSize, riskPerTrade });
+
+          if (sizeMode === 'fixed') {
+              message.info(`正在使用固定手数模式: ${fixedSize} 手`);
+          } else {
+              message.info(`正在使用ATR风险模式: ${(riskPerTrade * 100).toFixed(1)}%`);
+          }
+
           params = {
               ma_period: parseInt(values.ma_period || 55),
               macd_fast: parseInt(values.macd_fast || 12),
@@ -100,7 +129,9 @@ const App = () => {
               macd_signal: parseInt(values.macd_signal || 9),
               atr_period: parseInt(values.atr_period),
               atr_multiplier: parseFloat(values.atr_multiplier),
-              risk_per_trade: parseFloat(values.risk_per_trade),
+              size_mode: sizeMode,
+              fixed_size: fixedSize,
+              risk_per_trade: riskPerTrade,
               contract_multiplier: parseInt(values.contract_multiplier)
           };
       }
@@ -168,6 +199,159 @@ const App = () => {
                         { value: won, name: '盈利交易', itemStyle: { color: '#3f8600' } },
                         { value: lost, name: '亏损交易', itemStyle: { color: '#cf1322' } }
                     ]
+                }
+            ]
+        };
+    }
+
+    if (chartType === 'kline') {
+        const dates = results.kline_data?.dates || [];
+        const data = results.kline_data?.values || [];
+        const volumes = results.kline_data?.volumes || [];
+
+        return {
+            title: { text: 'K线图 & 交易信号' },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: {
+                    type: 'cross'
+                }
+            },
+            legend: {
+                data: ['K线', 'MA5', 'MA10', 'MA20', 'MA55']
+            },
+            grid: [
+                {
+                    left: '3%',
+                    right: '4%',
+                    height: '60%'
+                },
+                {
+                    left: '3%',
+                    right: '4%',
+                    top: '75%',
+                    height: '15%'
+                }
+            ],
+            xAxis: [
+                {
+                    type: 'category',
+                    data: dates,
+                    scale: true,
+                    boundaryGap: false,
+                    axisLine: { onZero: false },
+                    splitLine: { show: false },
+                    min: 'dataMin',
+                    max: 'dataMax'
+                },
+                {
+                    type: 'category',
+                    gridIndex: 1,
+                    data: dates,
+                    axisLabel: { show: false }
+                }
+            ],
+            yAxis: [
+                {
+                    scale: true,
+                    splitArea: {
+                        show: true
+                    }
+                },
+                {
+                    scale: true,
+                    gridIndex: 1,
+                    splitNumber: 2,
+                    axisLabel: { show: false },
+                    axisLine: { show: false },
+                    axisTick: { show: false },
+                    splitLine: { show: false }
+                }
+            ],
+            dataZoom: [
+                {
+                    type: 'inside',
+                    xAxisIndex: [0, 1],
+                    start: 50,
+                    end: 100
+                },
+                {
+                    show: true,
+                    xAxisIndex: [0, 1],
+                    type: 'slider',
+                    top: '92%',
+                    start: 50,
+                    end: 100
+                }
+            ],
+            series: [
+                {
+                    name: 'K线',
+                    type: 'candlestick',
+                    data: data,
+                    itemStyle: {
+                        color: '#ef232a',
+                        color0: '#14b143',
+                        borderColor: '#ef232a',
+                        borderColor0: '#14b143'
+                    },
+                    markPoint: {
+                        label: {
+                            normal: {
+                                formatter: function (param) {
+                                    return param.name != null ? param.name : '';
+                                }
+                            }
+                        },
+                        data: results.trades ? results.trades.map(t => ({
+                            name: t.type === 'buy' ? '买' : '卖',
+                            coord: [t.date, t.price],
+                            value: t.price,
+                            itemStyle: {
+                                color: t.type === 'buy' ? '#ef232a' : '#14b143'
+                            }
+                        })) : [],
+                        tooltip: {
+                            formatter: function (param) {
+                                return param.name + '<br>' + (param.data.coord || '');
+                            }
+                        }
+                    }
+                },
+                {
+                    name: 'MA5',
+                    type: 'line',
+                    data: calculateMA(5, data),
+                    smooth: true,
+                    lineStyle: { opacity: 0.5 }
+                },
+                {
+                    name: 'MA10',
+                    type: 'line',
+                    data: calculateMA(10, data),
+                    smooth: true,
+                    lineStyle: { opacity: 0.5 }
+                },
+                {
+                    name: 'MA20',
+                    type: 'line',
+                    data: calculateMA(20, data),
+                    smooth: true,
+                    lineStyle: { opacity: 0.5 }
+                },
+                {
+                    name: 'MA55',
+                    type: 'line',
+                    data: calculateMA(55, data),
+                    smooth: true,
+                    lineStyle: { opacity: 0.8, width: 2 }
+                },
+                {
+                    name: 'Volume',
+                    type: 'bar',
+                    xAxisIndex: 1,
+                    yAxisIndex: 1,
+                    data: volumes
                 }
             ]
         };
@@ -392,11 +576,16 @@ const App = () => {
                         </Card>
                         
                         <Card 
-                            title={chartType === 'line' ? "账户权益曲线" : "盈亏分布分析"} 
+                            title={
+                                chartType === 'line' ? "账户权益曲线" : 
+                                chartType === 'kline' ? "K线图 & 交易信号" :
+                                "盈亏分布分析"
+                            } 
                             bordered={false}
                             extra={
                                 <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)}>
                                     <Radio.Button value="line">趋势图</Radio.Button>
+                                    <Radio.Button value="kline">K线图</Radio.Button>
                                     <Radio.Button value="pie">饼状图</Radio.Button>
                                 </Radio.Group>
                             }

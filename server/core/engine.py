@@ -24,13 +24,43 @@ class BacktestEngine:
         # 继承策略以捕获日志 (动态继承)
         class LoggingStrategy(StrategyClass):
             def __init__(self):
+                # 务必调用父类 init
                 super().__init__()
                 self.logs = []
+                self.trades_history = []
+
+            def start(self):
+                # 确保列表已初始化（防止某些情况下 __init__ 属性丢失）
+                if not hasattr(self, 'logs'):
+                    self.logs = []
+                if not hasattr(self, 'trades_history'):
+                    self.trades_history = []
+                
+                # 调用父类的 start (如果有)
+                if hasattr(super(), 'start'):
+                    super().start()
 
             def log(self, txt, dt=None):
+                if not hasattr(self, 'logs'):
+                    self.logs = []
                 dt = dt or self.datas[0].datetime.date(0)
                 log_entry = f'{dt.isoformat()}, {txt}'
                 self.logs.append(log_entry)
+
+            def notify_order(self, order):
+                if not hasattr(self, 'trades_history'):
+                    self.trades_history = []
+                    
+                if order.status in [order.Completed]:
+                    dt = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d %H:%M:%S')
+                    self.trades_history.append({
+                        "date": dt,
+                        "type": "buy" if order.isbuy() else "sell",
+                        "price": order.executed.price,
+                        "size": order.executed.size
+                    })
+                
+                super().notify_order(order)
 
         cerebro = bt.Cerebro()
         
@@ -120,9 +150,26 @@ class BacktestEngine:
         
         pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
         
+        # 准备 K 线数据
+        # 确保索引是 datetime
+        df_kline = df.copy()
+        if not isinstance(df_kline.index, pd.DatetimeIndex):
+             # 尝试将索引转换为 datetime，或者使用 date 列
+             if 'date' in df_kline.columns:
+                 df_kline['date'] = pd.to_datetime(df_kline['date'])
+                 df_kline.set_index('date', inplace=True)
+        
+        kline_data = {
+            "dates": df_kline.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+            "values": df_kline[['Open', 'Close', 'Low', 'High']].values.tolist(),
+            "volumes": df_kline['Volume'].tolist() if 'Volume' in df_kline.columns else []
+        }
+
         return {
             "status": "success",
             "equity_curve": equity_curve,
+            "kline_data": kline_data,
+            "trades": strat.trades_history,
             "metrics": {
                 "initial_cash": initial_cash,
                 "final_value": cerebro.broker.getvalue(),

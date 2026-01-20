@@ -158,6 +158,7 @@ class MA55BreakoutStrategy(bt.Strategy):
             print(f'{dt.isoformat()}, {txt}')
 
     def __init__(self):
+        super(MA55BreakoutStrategy, self).__init__()
         # 均线
         self.ma55 = bt.indicators.SimpleMovingAverage(
             self.datas[0], period=self.params.ma_period)
@@ -194,6 +195,11 @@ class MA55BreakoutStrategy(bt.Strategy):
         self.current_wave_macd_max = -9999
         self.current_wave_low_price = 999999
         self.current_wave_macd_min = 9999
+
+    def start(self):
+        if self.params.print_log:
+             mode_desc = f"固定手数({self.params.fixed_size})" if self.params.size_mode == 'fixed' else f"ATR风险({self.params.risk_per_trade})"
+             self.log(f"策略启动: MA55突破, 开仓模式: {mode_desc}, ATR倍数: {self.params.atr_multiplier}")
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -291,7 +297,10 @@ class MA55BreakoutStrategy(bt.Strategy):
             
             size = 0
             if self.params.size_mode == 'fixed':
-                size = self.params.fixed_size or 1
+                try:
+                    size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
+                except (ValueError, TypeError):
+                    size = 1
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
@@ -314,7 +323,10 @@ class MA55BreakoutStrategy(bt.Strategy):
             
             size = 0
             if self.params.size_mode == 'fixed':
-                size = self.params.fixed_size or 1
+                try:
+                    size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
+                except (ValueError, TypeError):
+                    size = 1
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
