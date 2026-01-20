@@ -6,7 +6,7 @@ from .data_loader import fetch_futures_data
 from . import strategy
 
 class BacktestEngine:
-    def run(self, symbol, period, strategy_params, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
         # 强制重载策略模块，确保使用最新代码
         importlib.reload(strategy)
         
@@ -46,6 +46,8 @@ class BacktestEngine:
                 dt = dt or self.datas[0].datetime.date(0)
                 log_entry = f'{dt.isoformat()}, {txt}'
                 self.logs.append(log_entry)
+                # 同时打印到控制台以便调试
+                print(log_entry)
 
             def notify_order(self, order):
                 if not hasattr(self, 'trades_history'):
@@ -64,12 +66,16 @@ class BacktestEngine:
                     if size > 0: # 买入
                         if prev_pos >= 0:
                             action_type = "买多" # 开多 or 加多
-                        else: # prev_pos < 0
+                        elif prev_pos < 0 and current_pos > 0:
+                            action_type = "反手做多" # 之前是空仓，现在是多仓
+                        else: # prev_pos < 0 and current_pos <= 0
                             action_type = "平空" # 买入平空
                     else: # 卖出 (size < 0)
                         if prev_pos <= 0:
                             action_type = "卖空" # 开空 or 加空
-                        else: # prev_pos > 0
+                        elif prev_pos > 0 and current_pos < 0:
+                            action_type = "反手做空" # 之前是多仓，现在是空仓
+                        else: # prev_pos > 0 and current_pos >= 0
                             action_type = "平多" # 卖出平多
                             
                     self.trades_history.append({
@@ -77,7 +83,8 @@ class BacktestEngine:
                         "type": "buy" if order.isbuy() else "sell",
                         "action": action_type,
                         "price": price,
-                        "size": size
+                        "size": size,
+                        "position": current_pos  # 添加当前持仓量
                     })
                 
                 super().notify_order(order)
@@ -115,13 +122,13 @@ class BacktestEngine:
         cerebro.addstrategy(LoggingStrategy, **strategy_params)
         
         # 3. 资金设置
-        initial_cash = 1000000.0
         cerebro.broker.setcash(initial_cash)
         
         # 手续费设置 (根据品种可以做个简单映射，这里暂时通用)
         # 假设是期货，按手收费或按比例
         # 为了演示，设置一个通用费率
-        cerebro.broker.setcommission(commission=0.0001, margin=20000.0, mult=strategy_params.get('contract_multiplier', 1))
+        # 将 margin 设置为 0，禁用 Broker 端的保证金检查，完全由策略端的仓位管理控制风险
+        cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=strategy_params.get('contract_multiplier', 1))
         
         # 4. 添加分析器
         cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
@@ -158,7 +165,9 @@ class BacktestEngine:
             
         # 绩效指标
         sharpe_analysis = strat.analyzers.sharpe.get_analysis()
-        sharpe = sharpe_analysis.get('sharperatio', 0)
+        sharpe = sharpe_analysis.get('sharperatio')
+        if sharpe is None:
+            sharpe = 0.0
         
         drawdown_analysis = strat.analyzers.drawdown.get_analysis()
         max_drawdown = drawdown_analysis.get('max', {}).get('drawdown', 0)

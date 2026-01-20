@@ -44,10 +44,31 @@ class BacktestRequest(BaseModel):
     symbol: str
     period: str
     strategy_params: Dict[str, Any]
+    initial_cash: float = 1000000.0 # 初始资金
     auto_optimize: bool = True # 是否开启自动优化
-    start_date: Optional[str] = "2025-09-01" # 开始时间 (YYYY-MM-DD)
-    end_date: Optional[str] = "2025-12-31"   # 结束时间 (YYYY-MM-DD)
+    start_date: Optional[str] = "2025-08-20" # 开始时间 (YYYY-MM-DD)
+    end_date: Optional[str] = "2025-12-10"   # 结束时间 (YYYY-MM-DD)
     strategy_name: str = "TrendFollowingStrategy"
+
+@app.get("/api/quote/latest")
+async def get_latest_quote(symbol: str):
+    try:
+        # 获取日线数据取最新价格
+        df = ak.futures_zh_daily_sina(symbol=symbol)
+        if df is None or df.empty:
+             raise HTTPException(status_code=404, detail="Symbol not found")
+        
+        latest = df.iloc[-1]
+        price = float(latest['close'])
+        
+        return {
+            "symbol": symbol,
+            "price": price,
+            "date": str(latest['date'])
+        }
+    except Exception as e:
+        print(f"Error fetching quote: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/backtest")
 async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
@@ -59,6 +80,7 @@ async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
         symbol=request.symbol, 
         period=request.period, 
         strategy_params=request.strategy_params,
+        initial_cash=request.initial_cash,
         start_date=request.start_date,
         end_date=request.end_date,
         strategy_name=request.strategy_name

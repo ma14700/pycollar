@@ -50,16 +50,28 @@ class TrendFollowingStrategy(bt.Strategy):
         self.stop_price = None  # 止损价格
         self.order = None       # 当前挂单
 
+    def start(self):
+        if self.params.print_log:
+            self.log(f"策略启动: TrendFollowingStrategy (趋势跟踪), 参数: Fast={self.params.fast_period}, Slow={self.params.slow_period}, ATR={self.params.atr_period}x{self.params.atr_multiplier}")
+
+
     def notify_order(self, order):
         """ 订单状态更新通知 """
         if order.status in [order.Submitted, order.Accepted]:
             return
 
         if order.status in [order.Completed]:
-            if order.isbuy():
-                self.log(f'买入执行: 价格: {order.executed.price:.2f}, 成本: {order.executed.value:.2f}, 手续费: {order.executed.comm:.2f}')
-            elif order.issell():
-                self.log(f'卖出执行: 价格: {order.executed.price:.2f}, 成本: {order.executed.value:.2f}, 手续费: {order.executed.comm:.2f}')
+            action = "买入" if order.isbuy() else "卖出"
+            current_pos = self.position.size
+            exec_size = order.executed.size
+            msg = f'{action}执行: 价格: {order.executed.price:.2f}, 成交数量: {exec_size} (当前持仓: {current_pos}), 成本: {order.executed.value:.2f}, 手续费: {order.executed.comm:.2f}'
+            self.log(msg)
+            
+            # 记录平仓/反手导致的手数变化，用于 notify_trade 计算点数
+            prev_pos = current_pos - exec_size
+            if (prev_pos > 0 and exec_size < 0) or (prev_pos < 0 and exec_size > 0):
+                self.last_closed_trade_size = min(abs(prev_pos), abs(exec_size))
+                
             self.bar_executed = len(self)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
@@ -67,13 +79,50 @@ class TrendFollowingStrategy(bt.Strategy):
 
         self.order = None
 
+    def stop(self):
+        """ 策略结束时调用 """
+        value = self.broker.get_value()
+        initial_cash = self.broker.startingcash
+        total_pnl = value - initial_cash
+        self.log(f'=========================================')
+        self.log(f'回测结束统计:')
+        self.log(f'初始资金: {initial_cash:.2f}')
+        self.log(f'最终权益: {value:.2f}')
+        self.log(f'总盈亏: {total_pnl:.2f}')
+        self.log(f'=========================================')
+
     def notify_trade(self, trade):
         """ 交易结束通知 """
         if not trade.isclosed:
             return
-        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}')
+        
+        points_msg = ""
+        closed_size = getattr(self, 'last_closed_trade_size', 0)
+        if closed_size > 0 and self.params.contract_multiplier > 0:
+            try:
+                points = trade.pnl / (closed_size * self.params.contract_multiplier)
+                points_msg = f", 盈亏点数: {points:.2f}"
+            except ZeroDivisionError:
+                pass
+        
+        # 计算持仓天数
+        dtopen = bt.num2date(trade.dtopen)
+        dtclose = bt.num2date(trade.dtclose)
+        duration = (dtclose - dtopen).days
+
+        # 计算累计收益
+        total_pnl = self.broker.get_value() - self.broker.startingcash
+        
+        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
 
     def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
         """ 主策略逻辑 """
         # 如果有订单正在处理，不进行新操作
         if self.order:
@@ -146,7 +195,9 @@ class MA55BreakoutStrategy(bt.Strategy):
         ('atr_period', 14),      # ATR 周期
         ('atr_multiplier', 3.0), # ATR 止损倍数 (默认放宽，以便背离离场)
         ('risk_per_trade', 0.02),# 每笔风险
-        ('size_mode', 'atr_risk'), # 开仓模式: 'fixed' 或 'atr_risk'
+        ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
+        ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
+        ('size_mode', 'atr_risk'), # 开仓模式: 'fixed', 'equity_percent', 'atr_risk'
         ('fixed_size', 1),       # 固定手数
         ('contract_multiplier', 1), # 合约乘数
         ('use_trailing_stop', False), # 是否使用移动止损 (默认为False，主要依靠背离)
@@ -200,19 +251,76 @@ class MA55BreakoutStrategy(bt.Strategy):
     def start(self):
         if self.params.print_log:
              mode_desc = f"固定手数({self.params.fixed_size})" if self.params.size_mode == 'fixed' else f"ATR风险({self.params.risk_per_trade})"
-             self.log(f"策略启动: MA55突破, 开仓模式: {mode_desc}, ATR倍数: {self.params.atr_multiplier}, 移动止损: {self.params.use_trailing_stop}")
+             self.log(f"策略启动: MA55BreakoutStrategy (MA55突破), 参数: MA={self.params.ma_period}, 开仓模式: {mode_desc}, ATR倍数: {self.params.atr_multiplier}, 移动止损: {self.params.use_trailing_stop}")
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             return
         if order.status in [order.Completed]:
-            if order.isbuy():
-                self.log(f'买入执行: {order.executed.price:.2f}')
-            elif order.issell():
-                self.log(f'卖出执行: {order.executed.price:.2f}')
+            action = "买入" if order.isbuy() else "卖出"
+            current_pos = self.position.size
+            exec_size = order.executed.size
+            
+            # 优化显示逻辑：如果是反手（例如 +20 -> -20，成交 -40），提示用户
+            msg = f'{action}执行: 价格: {order.executed.price:.2f}, 成交数量: {exec_size}'
+            if abs(exec_size) > abs(current_pos) and current_pos != 0 and (exec_size * current_pos > 0): 
+                 # 简单的反手判断：成交量绝对值 > 持仓绝对值，且同向（例如成交-40，持仓-20，说明之前是+20）
+                 # 注意：order.executed.size 和 self.position.size 在 Completed 时通常已经是同符号（除非是平仓）
+                 pass
+            
+            msg += f' (当前持仓: {current_pos})'
+            self.log(msg)
+            
+            # 记录平仓/反手导致的手数变化，用于 notify_trade 计算点数
+            prev_pos = current_pos - exec_size
+            if (prev_pos > 0 and exec_size < 0) or (prev_pos < 0 and exec_size > 0):
+                self.last_closed_trade_size = min(abs(prev_pos), abs(exec_size))
+            
         self.order = None
 
+    def stop(self):
+        """ 策略结束时调用 """
+        value = self.broker.get_value()
+        initial_cash = self.broker.startingcash
+        total_pnl = value - initial_cash
+        self.log(f'=========================================')
+        self.log(f'回测结束统计:')
+        self.log(f'初始资金: {initial_cash:.2f}')
+        self.log(f'最终权益: {value:.2f}')
+        self.log(f'总盈亏: {total_pnl:.2f}')
+        self.log(f'=========================================')
+
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
+        
+        points_msg = ""
+        closed_size = getattr(self, 'last_closed_trade_size', 0)
+        if closed_size > 0 and self.params.contract_multiplier > 0:
+            try:
+                points = trade.pnl / (closed_size * self.params.contract_multiplier)
+                points_msg = f", 盈亏点数: {points:.2f}"
+            except ZeroDivisionError:
+                pass
+        
+        # 计算持仓天数
+        dtopen = bt.num2date(trade.dtopen)
+        dtclose = bt.num2date(trade.dtclose)
+        duration = (dtclose - dtopen).days
+
+        # 计算累计收益
+        total_pnl = self.broker.get_value() - self.broker.startingcash
+        
+        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
+
     def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
         # if self.order:
         #    return
             
@@ -303,6 +411,13 @@ class MA55BreakoutStrategy(bt.Strategy):
                     size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
                 except (ValueError, TypeError):
                     size = 1
+            elif self.params.size_mode == 'equity_percent':
+                target_value = value * self.params.equity_percent
+                one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                if one_hand_margin > 0:
+                    size = int(target_value / one_hand_margin)
+                else:
+                    size = 0
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
@@ -332,6 +447,13 @@ class MA55BreakoutStrategy(bt.Strategy):
                     size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
                 except (ValueError, TypeError):
                     size = 1
+            elif self.params.size_mode == 'equity_percent':
+                target_value = value * self.params.equity_percent
+                one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                if one_hand_margin > 0:
+                    size = int(target_value / one_hand_margin)
+                else:
+                    size = 0
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
@@ -396,7 +518,9 @@ class MA55TouchExitStrategy(bt.Strategy):
     params = (
         ('ma_period', 55),       # 均线周期
         ('risk_per_trade', 0.02),# 每笔风险
-        ('size_mode', 'atr_risk'), # 开仓模式: 'fixed' 或 'atr_risk'
+        ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
+        ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
+        ('size_mode', 'atr_risk'), # 开仓模式: 'fixed', 'equity_percent', 'atr_risk'
         ('fixed_size', 1),       # 固定手数
         ('contract_multiplier', 1), # 合约乘数
         ('atr_period', 14),      # ATR 周期 (仅用于计算仓位)
@@ -437,46 +561,101 @@ class MA55TouchExitStrategy(bt.Strategy):
     def start(self):
         if self.params.print_log:
              mode_desc = f"固定手数({self.params.fixed_size})" if self.params.size_mode == 'fixed' else f"ATR风险({self.params.risk_per_trade})"
-             self.log(f"策略启动: MA55触碰平仓, 开仓模式: {mode_desc}")
+             self.log(f"策略启动: MA55TouchExitStrategy (MA55触碰平仓), 参数: MA={self.params.ma_period}, 开仓模式: {mode_desc}")
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             return
         if order.status in [order.Completed]:
-            if order.isbuy():
-                self.log(f'买入执行: {order.executed.price:.2f}')
-            elif order.issell():
-                self.log(f'卖出执行: {order.executed.price:.2f}')
+            action = "买入" if order.isbuy() else "卖出"
+            current_pos = self.position.size
+            exec_size = order.executed.size
+            msg = f'{action}执行: 价格: {order.executed.price:.2f}, 成交数量: {exec_size} (当前持仓: {current_pos})'
+            self.log(msg)
+            
+            # 记录平仓/反手导致的手数变化，用于 notify_trade 计算点数
+            prev_pos = current_pos - exec_size
+            if (prev_pos > 0 and exec_size < 0) or (prev_pos < 0 and exec_size > 0):
+                self.last_closed_trade_size = min(abs(prev_pos), abs(exec_size))
+                
         self.order = None
 
-    def next(self):
-        # 移除了订单等待检查，以便反手
+    def stop(self):
+        """ 策略结束时调用 """
+        value = self.broker.get_value()
+        initial_cash = self.broker.startingcash
+        total_pnl = value - initial_cash
+        self.log(f'=========================================')
+        self.log(f'回测结束统计:')
+        self.log(f'初始资金: {initial_cash:.2f}')
+        self.log(f'最终权益: {value:.2f}')
+        self.log(f'总盈亏: {total_pnl:.2f}')
+        self.log(f'=========================================')
+
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
         
+        points_msg = ""
+        closed_size = getattr(self, 'last_closed_trade_size', 0)
+        if closed_size > 0 and self.params.contract_multiplier > 0:
+            try:
+                points = trade.pnl / (closed_size * self.params.contract_multiplier)
+                points_msg = f", 盈亏点数: {points:.2f}"
+            except ZeroDivisionError:
+                pass
+        
+        # 计算持仓天数
+        dtopen = bt.num2date(trade.dtopen)
+        dtclose = bt.num2date(trade.dtclose)
+        duration = (dtclose - dtopen).days
+
+        # 计算累计收益
+        total_pnl = self.broker.get_value() - self.broker.startingcash
+        
+        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
+
+    def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
         value = self.broker.get_value()
         close = self.datas[0].close[0]
         low = self.datas[0].low[0]
         high = self.datas[0].high[0]
         ma_val = self.ma55[0]
         
+        # 上一根数据
+        last_close = self.datas[0].close[-1]
+        last_ma = self.ma55[-1]
+        
         current_idx = len(self)
+        dt_str = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d %H:%M')
+
+        # 手动计算交叉
+        # 金叉: 上一根 <= MA, 当前 > MA
+        cross_up = last_close <= last_ma and close > ma_val
+        # 死叉: 上一根 >= MA, 当前 < MA
+        cross_down = last_close >= last_ma and close < ma_val
+
+        # 调试日志：关键时刻打印
+        if cross_up or cross_down or (self.position.size > 0 and low <= ma_val) or (self.position.size < 0 and high >= ma_val):
+            self.log(f'[DEBUG] Close: {close:.2f}, MA: {ma_val:.2f}, LastClose: {last_close:.2f}, LastMA: {last_ma:.2f}, CrossUp: {cross_up}, CrossDown: {cross_down}')
 
         has_signal = False
 
         # 1. 突破信号 (优先于平仓)
-        if self.crossover_ma[0] > 0:
-            self.log(f'MA55 向上突破: {close:.2f} > {ma_val:.2f}')
+        if cross_up:
+            self.log(f'MA55 向上突破: {close:.2f} > {ma_val:.2f} (上根: {last_close:.2f} <= {last_ma:.2f})')
             has_signal = True
-            
-            # 初始化状态
-            self.entry_bar_index = current_idx
-            self.entry_bar_close = close
-            self.bar1_checked = False
-            self.is_weak_breakout = False
-            self.pending_exit_check = False
             
             # 计算仓位
             atr_val = self.atr[0]
-            stop_dist = atr_val * self.params.atr_multiplier # 用于风险计算的止损距离
+            stop_dist = atr_val * self.params.atr_multiplier 
             
             size = 0
             if self.params.size_mode == 'fixed':
@@ -484,6 +663,13 @@ class MA55TouchExitStrategy(bt.Strategy):
                     size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
                 except (ValueError, TypeError):
                     size = 1
+            elif self.params.size_mode == 'equity_percent':
+                target_value = value * self.params.equity_percent
+                one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                if one_hand_margin > 0:
+                    size = int(target_value / one_hand_margin)
+                else:
+                    size = 0
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
@@ -493,22 +679,14 @@ class MA55TouchExitStrategy(bt.Strategy):
                 self.log(f'做多/反手做多: 目标持仓 {size}')
                 self.order = self.order_target_size(target=size)
             else:
-                self.log(f'警告: 做多信号触发但仓位计算为0! 权益: {value:.2f}, 风险: {self.params.risk_per_trade}')
-                # 如果持有空单且触发了做多信号，即使新仓位为0，也应该平掉空单
+                self.log(f'警告: 做多信号触发但仓位计算为0! 权益: {value:.2f}')
                 if self.position.size < 0:
                      self.log('强制平空 (反手仓位为0)')
                      self.order = self.close()
 
-        elif self.crossover_ma[0] < 0:
-            self.log(f'MA55 向下突破: {close:.2f} < {ma_val:.2f}')
+        elif cross_down:
+            self.log(f'MA55 向下突破: {close:.2f} < {ma_val:.2f} (上根: {last_close:.2f} >= {last_ma:.2f})')
             has_signal = True
-            
-            # 初始化状态
-            self.entry_bar_index = current_idx
-            self.entry_bar_close = close
-            self.bar1_checked = False
-            self.is_weak_breakout = False
-            self.pending_exit_check = False
             
             # 计算仓位
             atr_val = self.atr[0]
@@ -520,6 +698,13 @@ class MA55TouchExitStrategy(bt.Strategy):
                     size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
                 except (ValueError, TypeError):
                     size = 1
+            elif self.params.size_mode == 'equity_percent':
+                target_value = value * self.params.equity_percent
+                one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                if one_hand_margin > 0:
+                    size = int(target_value / one_hand_margin)
+                else:
+                    size = 0
             else:
                 risk_amt = value * self.params.risk_per_trade
                 risk_unit = stop_dist * self.params.contract_multiplier
@@ -529,89 +714,299 @@ class MA55TouchExitStrategy(bt.Strategy):
                 self.log(f'做空/反手做空: 目标持仓 {-size}')
                 self.order = self.order_target_size(target=-size)
             else:
-                self.log(f'警告: 做空信号触发但仓位计算为0! 权益: {value:.2f}, 风险: {self.params.risk_per_trade}')
-                # 如果持有多单且触发了做空信号，即使新仓位为0，也应该平掉多单
+                self.log(f'警告: 做空信号触发但仓位计算为0! 权益: {value:.2f}')
                 if self.position.size > 0:
                      self.log('强制平多 (反手仓位为0)')
                      self.order = self.close()
 
-        # 2. 状态更新 (检查第二根K线)
-        if self.position and not has_signal:
-             # 如果当前是开仓后的第二根K线 (Entry + 1)
-             if current_idx == self.entry_bar_index + 1:
-                 diff = close - self.entry_bar_close
-                 
-                 # 多单检查
-                 if self.position.size > 0:
-                     self.bar1_high = high # 记录第二根的最高价
-                     if diff <= self.params.weak_threshold:
-                         self.is_weak_breakout = True
-                         self.log(f'弱势突破确认: 涨幅 {diff:.2f} <= {self.params.weak_threshold}, 启用延迟平仓逻辑')
-                     else:
-                         self.log(f'强势突破确认: 涨幅 {diff:.2f} > {self.params.weak_threshold}')
-                 
-                 # 空单检查
-                 elif self.position.size < 0:
-                     self.bar1_low = low # 记录第二根的最低价
-                     # 空单跌幅应为负数，比较绝对跌幅是否足够大，或者看是否跌了7个点以上 (Close < Entry - 7)
-                     # 也就是说 Entry - Close > 7 => Close - Entry < -7
-                     # 用户说"不高于第一根7个点"，对于空单应该是"不低于第一根7个点"?
-                     # 意图是：如果没有显著下跌（跌幅不够）。
-                     # 所以如果是下跌： Entry - Close <= 7  => Close >= Entry - 7
-                     if (self.entry_bar_close - close) <= self.params.weak_threshold:
-                         self.is_weak_breakout = True
-                         self.log(f'弱势突破确认: 跌幅 {(self.entry_bar_close - close):.2f} <= {self.params.weak_threshold}, 启用延迟平仓逻辑')
-                     else:
-                         self.log(f'强势突破确认: 跌幅 {(self.entry_bar_close - close):.2f} > {self.params.weak_threshold}')
-
-        # 3. 平仓逻辑
+        # 2. 如果没有突破信号，检查是否需要平仓
         if not has_signal and self.position:
-            # 优先处理待定平仓状态 (Pending Exit)
-            if self.pending_exit_check:
-                # 多单：等待下一根不高于第二根 (Close <= Bar1_High)
-                if self.position.size > 0:
-                    if close <= self.bar1_high:
-                         self.log(f'延迟平仓触发: 收盘价 {close:.2f} <= 第二根高点 {self.bar1_high:.2f}')
-                         self.order = self.close()
-                    else:
-                         self.log(f'延迟平仓取消: 价格反弹 {close:.2f} > {self.bar1_high:.2f}, 继续持仓')
-                
-                # 空单：等待下一根不低于第二根 (Close >= Bar1_Low)
-                elif self.position.size < 0:
-                    if close >= self.bar1_low:
-                        self.log(f'延迟平仓触发: 收盘价 {close:.2f} >= 第二根低点 {self.bar1_low:.2f}')
-                        self.order = self.close()
-                    else:
-                        self.log(f'延迟平仓取消: 价格回落 {close:.2f} < {self.bar1_low:.2f}, 继续持仓')
-                
-                # 无论是否平仓，Pending状态解除 (只检查一根)
-                # 或者用户意思是一直等？"也要等下一个线不高于第二根才能平仓"
-                # 如果这根不行，下根继续等？通常"等下一个线"暗示只看下一根。
-                # 但为了安全，如果反弹了就不平了，回归正常碰线检查比较合理。
-                self.pending_exit_check = False
-                return # 本次循环结束
-
-            # 常规碰线检查
             # 多单持仓
             if self.position.size > 0:
-                # 价格回落触碰/跌破 MA55 (使用 Low 判断盘中触碰)
-                if low <= ma_val:
-                     if self.is_weak_breakout:
-                         # 弱势突破，进入延迟检查
-                         self.log(f'多单触碰均线 (Low {low:.2f} <= MA {ma_val:.2f}), 但由于弱势突破，等待下一根确认')
-                         self.pending_exit_check = True
-                     else:
-                         self.log(f'多单盘中触碰均线平仓: Low {low:.2f} <= MA {ma_val:.2f}')
-                         self.order = self.close()
+                # 改为: 收盘价跌破 MA55 平仓 (不再使用盘中触碰)
+                if close < ma_val:
+                     self.log(f'多单收盘跌破均线平仓: Close {close:.2f} < MA {ma_val:.2f}')
+                     self.order = self.close()
             
             # 空单持仓
             elif self.position.size < 0:
-                # 价格反弹触碰/升破 MA55 (使用 High 判断盘中触碰)
-                if high >= ma_val:
-                    if self.is_weak_breakout:
-                        # 弱势突破，进入延迟检查
-                        self.log(f'空单触碰均线 (High {high:.2f} >= MA {ma_val:.2f}), 但由于弱势突破，等待下一根确认')
-                        self.pending_exit_check = True
+                # 改为: 收盘价升破 MA55 平仓 (不再使用盘中触碰)
+                if close > ma_val:
+                    self.log(f'空单收盘升破均线平仓: Close {close:.2f} > MA {ma_val:.2f}')
+                    self.order = self.close()
+
+class MA20MA55CrossoverStrategy(bt.Strategy):
+    """
+    20/55 双均线交叉策略
+    1. 核心逻辑：MA20 与 MA55 交叉
+    2. 交易信号：
+       - MA20 上穿 MA55 (金叉)：做多 (若持有空单则反手)
+       - MA20 下穿 MA55 (死叉)：做空 (若持有多单则反手)
+    3. 离场：依赖反向信号进行反手，无固定止盈止损 (Always In 模式)
+    """
+    params = (
+        ('fast_period', 20),     # 快线周期
+        ('slow_period', 55),     # 慢线周期
+        ('risk_per_trade', 0.02),# 每笔风险
+        ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
+        ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
+        ('size_mode', 'atr_risk'), # 开仓模式: 'fixed', 'equity_percent', 'atr_risk'
+        ('fixed_size', 1),       # 固定手数
+        ('contract_multiplier', 1), # 合约乘数
+        ('atr_period', 14),      # ATR 周期 (仅用于计算仓位)
+        ('atr_multiplier', 3.0), # ATR 止损倍数 (仅用于计算仓位)
+        ('print_log', True),     # 打印日志
+    )
+
+    def log(self, txt, dt=None):
+        if self.params.print_log:
+            dt = dt or self.datas[0].datetime.date(0)
+            print(f'{dt.isoformat()}, {txt}')
+
+    def __init__(self):
+        super(MA20MA55CrossoverStrategy, self).__init__()
+        # 均线
+        self.ma_fast = bt.indicators.SimpleMovingAverage(
+            self.datas[0], period=self.params.fast_period)
+        self.ma_slow = bt.indicators.SimpleMovingAverage(
+            self.datas[0], period=self.params.slow_period)
+        
+        self.atr = bt.indicators.ATR(self.datas[0], period=self.params.atr_period)
+        
+        # 交叉信号: Fast 上穿/下穿 Slow
+        self.crossover = bt.indicators.CrossOver(self.ma_fast, self.ma_slow)
+        
+        self.order = None
+
+    def start(self):
+        if self.params.print_log:
+             mode_desc = f"固定手数({self.params.fixed_size})" if self.params.size_mode == 'fixed' else f"ATR风险({self.params.risk_per_trade})"
+             self.log(f"策略启动: MA20MA55CrossoverStrategy (双均线交叉), 参数: Fast={self.params.fast_period}, Slow={self.params.slow_period}, 开仓模式: {mode_desc}")
+
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+
+        if order.status in [order.Completed]:
+            action = "买入" if order.isbuy() else "卖出"
+            current_pos = self.position.size
+            exec_size = order.executed.size
+            msg = f'{action}执行: 价格: {order.executed.price:.2f}, 成交数量: {exec_size} (当前持仓: {current_pos})'
+            self.log(msg)
+            
+            # 记录平仓/反手导致的手数变化，用于 notify_trade 计算点数
+            prev_pos = current_pos - exec_size
+            if (prev_pos > 0 and exec_size < 0) or (prev_pos < 0 and exec_size > 0):
+                self.last_closed_trade_size = min(abs(prev_pos), abs(exec_size))
+                
+            self.bar_executed = len(self)
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log(f'订单失败: {order.getstatusname()}')
+
+        self.order = None
+
+    def stop(self):
+        """ 策略结束时调用 """
+        value = self.broker.get_value()
+        initial_cash = self.broker.startingcash
+        total_pnl = value - initial_cash
+        self.log(f'=========================================')
+        self.log(f'回测结束统计:')
+        self.log(f'初始资金: {initial_cash:.2f}')
+        self.log(f'最终权益: {value:.2f}')
+        self.log(f'总盈亏: {total_pnl:.2f}')
+        self.log(f'=========================================')
+
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
+        
+        points_msg = ""
+        closed_size = getattr(self, 'last_closed_trade_size', 0)
+        if closed_size > 0 and self.params.contract_multiplier > 0:
+            try:
+                points = trade.pnl / (closed_size * self.params.contract_multiplier)
+                points_msg = f", 盈亏点数: {points:.2f}"
+            except ZeroDivisionError:
+                pass
+        
+        # 计算持仓天数
+        dtopen = bt.num2date(trade.dtopen)
+        dtclose = bt.num2date(trade.dtclose)
+        duration = (dtclose - dtopen).days
+
+        # 计算累计收益
+        total_pnl = self.broker.get_value() - self.broker.startingcash
+        
+        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
+
+    def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
+        # 如果有订单正在处理，不进行新操作 (除了反手可能需要快速处理，但在 Backtrader 中通常等待完成)
+        # 为了保证反手顺畅，如果只是 Close 订单可能很快，但如果是 Target 订单，Backtrader 会处理
+        # 这里为了简单，如果有挂单先不操作，防止重复下单
+        if self.order:
+            return
+
+        value = self.broker.get_value()
+        
+        # 1. 金叉: 20 > 55
+        if self.crossover > 0:
+            self.log(f'金叉信号 (MA20 > MA55): {self.ma_fast[0]:.2f} > {self.ma_slow[0]:.2f}')
+            
+            # 计算目标仓位
+            size = self._calculate_size(value)
+            
+            if size > 0:
+                # order_target_size 会自动计算差额：
+                # - 如果当前空仓 0，买入 size
+                # - 如果当前持有空单 -size，买入 2*size 变为 +size
+                # - 如果当前持有多单 size，不操作
+                self.log(f'执行做多/反手做多: 目标持仓 {size}')
+                self.order = self.order_target_size(target=size)
+            else:
+                self.log(f'金叉触发但计算仓位为0. Value: {value:.2f}, Close: {self.datas[0].close[0]:.2f}')
+
+        # 2. 死叉: 20 < 55
+        elif self.crossover < 0:
+            self.log(f'死叉信号 (MA20 < MA55): {self.ma_fast[0]:.2f} < {self.ma_slow[0]:.2f}')
+            
+            # 计算目标仓位
+            size = self._calculate_size(value)
+            
+            if size > 0:
+                self.log(f'执行做空/反手做空: 目标持仓 {-size}')
+                self.order = self.order_target_size(target=-size)
+            else:
+                self.log(f'死叉触发但计算仓位为0. Value: {value:.2f}, Close: {self.datas[0].close[0]:.2f}')
+        
+        # 调试日志：每100根K线打印一次状态，确认策略在运行
+        # if len(self) % 100 == 0:
+        #      self.log(f'[Debug] Bar: {len(self)}, Close: {self.datas[0].close[0]:.2f}, MA20: {self.ma_fast[0]:.2f}, MA55: {self.ma_slow[0]:.2f}')
+
+    def _calculate_size(self, value):
+        atr_val = self.atr[0]
+        close = self.datas[0].close[0]
+        
+        size = 0
+        if self.params.size_mode == 'fixed':
+            try:
+                size = int(self.params.fixed_size) if self.params.fixed_size is not None else 1
+            except (ValueError, TypeError):
+                size = 1
+        elif self.params.size_mode == 'equity_percent':
+             target_value = value * self.params.equity_percent
+             if close > 0:
+                 size = int(target_value / (close * self.params.contract_multiplier))
+             else:
+                 size = 0
+        else:
+            # 默认 ATR 风险模式
+            multiplier = self.params.atr_multiplier if self.params.atr_multiplier is not None else 3.0
+            stop_dist = atr_val * multiplier
+            
+            risk_amt = value * self.params.risk_per_trade
+            risk_unit = stop_dist * self.params.contract_multiplier
+            size = int(risk_amt / risk_unit) if risk_unit > 0 else 0
+        
+        return size
+
+
+class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
+    """
+    20/55 双均线交叉策略 + 盈利平半仓
+    继承自 MA20MA55CrossoverStrategy，增加以下逻辑：
+    - 当浮动盈利点数达到 take_profit_points 时，平掉一半仓位。
+    """
+    params = (
+        ('take_profit_points', 0), # 盈利平半仓的点数，0表示禁用
+    )
+
+    def __init__(self):
+        super(MA20MA55PartialTakeProfitStrategy, self).__init__()
+        # 记录是否已经执行过平半仓
+        self.partial_exit_executed = False
+
+    def start(self):
+        super().start()
+        if self.params.take_profit_points > 0:
+            self.log(f"启用盈利平半仓逻辑: 目标盈利点数={self.params.take_profit_points}")
+        else:
+            self.log("未启用盈利平半仓逻辑 (点数为0)")
+
+    def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
+        if self.order:
+            return
+
+        # 如果当前没有持仓，重置标志位
+        if self.position.size == 0:
+            self.partial_exit_executed = False
+
+        value = self.broker.get_value()
+        
+        # 1. 检查是否有交叉信号 (反手/开仓)
+        signal_triggered = False
+        
+        # 金叉
+        if self.crossover > 0:
+            self.log(f'金叉信号 (MA20 > MA55): {self.ma_fast[0]:.2f} > {self.ma_slow[0]:.2f}')
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做多/反手做多: 目标持仓 {size}')
+                self.order = self.order_target_size(target=size)
+                self.partial_exit_executed = False
+                signal_triggered = True
+            else:
+                self.log(f'金叉触发但计算仓位为0')
+
+        # 死叉
+        elif self.crossover < 0:
+            self.log(f'死叉信号 (MA20 < MA55): {self.ma_fast[0]:.2f} < {self.ma_slow[0]:.2f}')
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做空/反手做空: 目标持仓 {-size}')
+                self.order = self.order_target_size(target=-size)
+                self.partial_exit_executed = False
+                signal_triggered = True
+            else:
+                self.log(f'死叉触发但计算仓位为0')
+        
+        if signal_triggered:
+            return
+
+        # 2. 检查盈利平半仓逻辑
+        if self.position.size != 0 and self.params.take_profit_points > 0 and not self.partial_exit_executed:
+            current_price = self.datas[0].close[0]
+            entry_price = self.position.price
+            
+            profit_points = 0
+            if self.position.size > 0: # 多头
+                profit_points = current_price - entry_price
+            else: # 空头
+                profit_points = entry_price - current_price
+            
+            if profit_points >= self.params.take_profit_points:
+                current_size = abs(self.position.size)
+                exit_size = current_size // 2
+                
+                if exit_size > 0:
+                    self.log(f'达到盈利点数 {profit_points:.2f} >= {self.params.take_profit_points}, 执行平半仓: {exit_size}手')
+                    if self.position.size > 0:
+                        self.order = self.sell(size=exit_size)
                     else:
-                        self.log(f'空单盘中触碰均线平仓: High {high:.2f} >= MA {ma_val:.2f}')
-                        self.order = self.close()
+                        self.order = self.buy(size=exit_size)
+                    self.partial_exit_executed = True
