@@ -1,0 +1,138 @@
+import backtrader as bt
+import pandas as pd
+import datetime
+import importlib
+from .data_loader import fetch_futures_data
+from . import strategy
+
+class BacktestEngine:
+    def run(self, symbol, period, strategy_params, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
+        # 强制重载策略模块，确保使用最新代码
+        importlib.reload(strategy)
+        
+        # 获取策略类
+        if not hasattr(strategy, strategy_name):
+             # 尝试使用默认策略
+             if hasattr(strategy, 'TrendFollowingStrategy'):
+                 print(f"警告: 未找到策略 '{strategy_name}'。将使用默认策略 'TrendFollowingStrategy'。")
+                 strategy_name = 'TrendFollowingStrategy'
+             else:
+                 return {"error": f"未在代码中找到策略类 '{strategy_name}'。"}
+        
+        StrategyClass = getattr(strategy, strategy_name)
+
+        # 继承策略以捕获日志 (动态继承)
+        class LoggingStrategy(StrategyClass):
+            def __init__(self):
+                super().__init__()
+                self.logs = []
+
+            def log(self, txt, dt=None):
+                dt = dt or self.datas[0].datetime.date(0)
+                log_entry = f'{dt.isoformat()}, {txt}'
+                self.logs.append(log_entry)
+
+        cerebro = bt.Cerebro()
+        
+        # 1. 加载数据
+        try:
+            df = fetch_futures_data(symbol=symbol, period=period, start_date=start_date, end_date=end_date)
+        except ValueError as ve:
+            # 捕获数据加载中抛出的已知错误（如日期范围不匹配）
+            return {"error": str(ve)}
+        except Exception as e:
+            return {"error": f"数据获取失败: {str(e)}"}
+            
+        if df is None or df.empty:
+            return {"error": "未找到该品种的数据，请检查代码或日期范围"}
+            
+        # 转换 timeframe
+        timeframe = bt.TimeFrame.Days if period == 'daily' else bt.TimeFrame.Minutes
+        compression = 1 if period == 'daily' else int(period)
+        
+        # 检查数据列
+        if 'OpenInterest' not in df.columns and 'hold' in df.columns:
+             df.rename(columns={'hold': 'OpenInterest'}, inplace=True)
+
+        data = bt.feeds.PandasData(dataname=df, timeframe=timeframe, compression=compression)
+        cerebro.adddata(data)
+        
+        # 2. 添加策略
+        # 确保 contract_multiplier 是 int
+        if 'contract_multiplier' in strategy_params:
+            strategy_params['contract_multiplier'] = int(strategy_params['contract_multiplier'])
+            
+        cerebro.addstrategy(LoggingStrategy, **strategy_params)
+        
+        # 3. 资金设置
+        initial_cash = 1000000.0
+        cerebro.broker.setcash(initial_cash)
+        
+        # 手续费设置 (根据品种可以做个简单映射，这里暂时通用)
+        # 假设是期货，按手收费或按比例
+        # 为了演示，设置一个通用费率
+        cerebro.broker.setcommission(commission=0.0001, margin=20000.0, mult=strategy_params.get('contract_multiplier', 1))
+        
+        # 4. 添加分析器
+        cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days, compression=1, riskfreerate=0.0)
+        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+        
+        # 5. 运行
+        results = cerebro.run()
+        if not results:
+            return {"error": "回测未产生结果"}
+            
+        strat = results[0]
+        
+        # 6. 提取结果
+        
+        # 权益曲线
+        timereturns = strat.analyzers.timereturn.get_analysis()
+        equity_curve = []
+        cumulative = 1.0
+        current_equity = initial_cash
+        
+        # TimeReturn 返回的是收益率，我们需要计算净值
+        # Backtrader 的 TimeReturn key 是 datetime 对象
+        for date, ret in timereturns.items():
+            if ret is None: ret = 0.0
+            cumulative *= (1.0 + ret)
+            current_equity = initial_cash * cumulative
+            equity_curve.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "value": current_equity,
+                "return": ret
+            })
+            
+        # 绩效指标
+        sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+        sharpe = sharpe_analysis.get('sharperatio', 0)
+        
+        drawdown_analysis = strat.analyzers.drawdown.get_analysis()
+        max_drawdown = drawdown_analysis.get('max', {}).get('drawdown', 0)
+        
+        trade_analysis = strat.analyzers.trades.get_analysis()
+        total_trades = trade_analysis.get('total', {}).get('total', 0)
+        won_trades = trade_analysis.get('won', {}).get('total', 0)
+        lost_trades = trade_analysis.get('lost', {}).get('total', 0)
+        
+        pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
+        
+        return {
+            "status": "success",
+            "equity_curve": equity_curve,
+            "metrics": {
+                "initial_cash": initial_cash,
+                "final_value": cerebro.broker.getvalue(),
+                "net_profit": cerebro.broker.getvalue() - initial_cash,
+                "sharpe_ratio": sharpe,
+                "max_drawdown": max_drawdown,
+                "total_trades": total_trades,
+                "win_rate": (won_trades / total_trades * 100) if total_trades > 0 else 0,
+                "won_trades": won_trades,
+                "lost_trades": lost_trades
+            },
+            "logs": strat.logs
+        }

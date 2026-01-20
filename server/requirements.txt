@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+backtrader
+pandas
+matplotlib
+akshare
