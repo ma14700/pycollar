@@ -2,3 +2,8 @@ numpy
 pandas
 backtrader
 matplotlib
+akshare
+fastapi
+uvicorn
+sqlalchemy
+pydantic

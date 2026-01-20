@@ -53,11 +53,31 @@ class BacktestEngine:
                     
                 if order.status in [order.Completed]:
                     dt = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    size = order.executed.size
+                    price = order.executed.price
+                    # 计算交易前的持仓
+                    current_pos = self.position.size
+                    prev_pos = current_pos - size
+                    
+                    action_type = "未知"
+                    if size > 0: # 买入
+                        if prev_pos >= 0:
+                            action_type = "买多" # 开多 or 加多
+                        else: # prev_pos < 0
+                            action_type = "平空" # 买入平空
+                    else: # 卖出 (size < 0)
+                        if prev_pos <= 0:
+                            action_type = "卖空" # 开空 or 加空
+                        else: # prev_pos > 0
+                            action_type = "平多" # 卖出平多
+                            
                     self.trades_history.append({
                         "date": dt,
                         "type": "buy" if order.isbuy() else "sell",
-                        "price": order.executed.price,
-                        "size": order.executed.size
+                        "action": action_type,
+                        "price": price,
+                        "size": size
                     })
                 
                 super().notify_order(order)
@@ -164,6 +184,28 @@ class BacktestEngine:
             "values": df_kline[['Open', 'Close', 'Low', 'High']].values.tolist(),
             "volumes": df_kline['Volume'].tolist() if 'Volume' in df_kline.columns else []
         }
+
+        # 计算 MACD (无论策略是否使用，都计算以便前端展示)
+        try:
+            fast_period = int(strategy_params.get('macd_fast', 12))
+            slow_period = int(strategy_params.get('macd_slow', 26))
+            signal_period = int(strategy_params.get('macd_signal', 9))
+            
+            close_price = df_kline['Close'].astype(float)
+            exp1 = close_price.ewm(span=fast_period, adjust=False).mean()
+            exp2 = close_price.ewm(span=slow_period, adjust=False).mean()
+            dif = exp1 - exp2
+            dea = dif.ewm(span=signal_period, adjust=False).mean()
+            macd_hist = (dif - dea) * 2
+            
+            kline_data['macd'] = {
+                "dif": dif.fillna(0).tolist(),
+                "dea": dea.fillna(0).tolist(),
+                "hist": macd_hist.fillna(0).tolist()
+            }
+        except Exception as e:
+            print(f"MACD Calculation Error: {e}")
+            kline_data['macd'] = None
 
         return {
             "status": "success",

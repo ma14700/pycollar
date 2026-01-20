@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker } from 'antd';
+import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import Editor from '@monaco-editor/react';
@@ -35,7 +36,7 @@ const App = () => {
   const [savingCode, setSavingCode] = useState(false);
   const [autoOptimize, setAutoOptimize] = useState(true);
 
-  const [strategyType, setStrategyType] = useState('TrendFollowingStrategy');
+  const [strategyType, setStrategyType] = useState('MA55BreakoutStrategy');
 
   useEffect(() => {
     // 获取品种列表
@@ -48,7 +49,8 @@ const App = () => {
             form.setFieldsValue({ 
                 symbol: defaultSymbol.code, 
                 contract_multiplier: defaultSymbol.multiplier,
-                date_range: [dayjs('2025-01-01'), dayjs('2026-01-01')]
+                date_range: [dayjs('2025-09-01'), dayjs('2025-12-31')],
+                period: '60' // 默认小时线
             });
         }
       })
@@ -108,7 +110,7 @@ const App = () => {
               contract_multiplier: parseInt(values.contract_multiplier)
           };
       } else {
-          // MA55BreakoutStrategy
+          // MA55BreakoutStrategy 或 MA55TouchExitStrategy
           const sizeMode = values.size_mode || 'atr_risk';
           const fixedSize = values.fixed_size !== undefined ? parseInt(values.fixed_size) : 1;
           const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
@@ -124,9 +126,6 @@ const App = () => {
 
           params = {
               ma_period: parseInt(values.ma_period || 55),
-              macd_fast: parseInt(values.macd_fast || 12),
-              macd_slow: parseInt(values.macd_slow || 26),
-              macd_signal: parseInt(values.macd_signal || 9),
               atr_period: parseInt(values.atr_period),
               atr_multiplier: parseFloat(values.atr_multiplier),
               size_mode: sizeMode,
@@ -134,6 +133,13 @@ const App = () => {
               risk_per_trade: riskPerTrade,
               contract_multiplier: parseInt(values.contract_multiplier)
           };
+
+          // 仅 MA55BreakoutStrategy 需要 MACD 参数
+          if (strategyType === 'MA55BreakoutStrategy') {
+              params.macd_fast = parseInt(values.macd_fast || 12);
+              params.macd_slow = parseInt(values.macd_slow || 26);
+              params.macd_signal = parseInt(values.macd_signal || 9);
+          }
       }
 
       const payload = {
@@ -206,8 +212,9 @@ const App = () => {
 
     if (chartType === 'kline') {
         const dates = results.kline_data?.dates || [];
-        const data = results.kline_data?.values || [];
+        const rawData = results.kline_data?.values || [];
         const volumes = results.kline_data?.volumes || [];
+        const macdData = results.kline_data?.macd || { dif: [], dea: [], hist: [] };
 
         return {
             title: { text: 'K线图 & 交易信号' },
@@ -218,18 +225,29 @@ const App = () => {
                 }
             },
             legend: {
-                data: ['K线', 'MA5', 'MA10', 'MA20', 'MA55']
+                data: ['K线', 'MA5', 'MA10', 'MA20', 'MA55', 'DIF', 'DEA', 'MACD'],
+                selected: {
+                    'MA5': false,
+                    'MA10': false
+                }
             },
             grid: [
                 {
                     left: '3%',
                     right: '4%',
-                    height: '60%'
+                    top: '5%',
+                    height: '55%' // K线图高度
                 },
                 {
                     left: '3%',
                     right: '4%',
-                    top: '75%',
+                    top: '63%', // Volume图位置
+                    height: '10%'
+                },
+                {
+                    left: '3%',
+                    right: '4%',
+                    top: '76%', // MACD图位置
                     height: '15%'
                 }
             ],
@@ -249,18 +267,31 @@ const App = () => {
                     gridIndex: 1,
                     data: dates,
                     axisLabel: { show: false }
+                },
+                {
+                    type: 'category',
+                    gridIndex: 2,
+                    data: dates,
+                    axisLabel: { show: false }
                 }
             ],
             yAxis: [
                 {
                     scale: true,
-                    splitArea: {
-                        show: true
-                    }
+                    splitArea: { show: true }
                 },
                 {
                     scale: true,
                     gridIndex: 1,
+                    splitNumber: 2,
+                    axisLabel: { show: false },
+                    axisLine: { show: false },
+                    axisTick: { show: false },
+                    splitLine: { show: false }
+                },
+                {
+                    scale: true,
+                    gridIndex: 2,
                     splitNumber: 2,
                     axisLabel: { show: false },
                     axisLine: { show: false },
@@ -271,15 +302,15 @@ const App = () => {
             dataZoom: [
                 {
                     type: 'inside',
-                    xAxisIndex: [0, 1],
+                    xAxisIndex: [0, 1, 2],
                     start: 50,
                     end: 100
                 },
                 {
                     show: true,
-                    xAxisIndex: [0, 1],
+                    xAxisIndex: [0, 1, 2],
                     type: 'slider',
-                    top: '92%',
+                    top: '94%',
                     start: 50,
                     end: 100
                 }
@@ -288,7 +319,7 @@ const App = () => {
                 {
                     name: 'K线',
                     type: 'candlestick',
-                    data: data,
+                    data: rawData,
                     itemStyle: {
                         color: '#ef232a',
                         color0: '#14b143',
@@ -300,51 +331,88 @@ const App = () => {
                             normal: {
                                 formatter: function (param) {
                                     return param.name != null ? param.name : '';
-                                }
+                                },
+                                fontSize: 11,
+                                fontWeight: 'bold'
                             }
                         },
-                        data: results.trades ? results.trades.map(t => ({
-                            name: t.type === 'buy' ? '买' : '卖',
-                            coord: [t.date, t.price],
-                            value: t.price,
-                            itemStyle: {
-                                color: t.type === 'buy' ? '#ef232a' : '#14b143'
+                        data: results.trades ? results.trades.map(t => {
+                            // 根据 action 决定颜色和图标方向
+                            let color = '#999';
+                            let symbolRotate = 0;
+                            const action = t.action || '';
+                            
+                            if (action === '买多') {
+                                color = '#ef232a'; // 红
+                                symbolRotate = 0;
+                            } else if (action === '卖空') {
+                                color = '#14b143'; // 绿
+                                symbolRotate = 180;
+                            } else if (action === '平多') {
+                                color = '#faad14'; // 黄/橙
+                                symbolRotate = 180;
+                            } else if (action === '平空') {
+                                color = '#722ed1'; // 紫
+                                symbolRotate = 0;
+                            } else {
+                                // fallback
+                                color = t.type === 'buy' ? '#ef232a' : '#14b143';
                             }
-                        })) : [],
-                        tooltip: {
-                            formatter: function (param) {
-                                return param.name + '<br>' + (param.data.coord || '');
-                            }
-                        }
+
+                            return {
+                                name: action,
+                                coord: [t.date, t.price],
+                                value: t.price,
+                                symbol: 'arrow',
+                                symbolSize: 12,
+                                symbolRotate: symbolRotate,
+                                symbolOffset: [0, action.includes('买') || action.includes('平空') ? 10 : -10],
+                                itemStyle: {
+                                    color: color
+                                },
+                                tooltip: {
+                                    formatter: function (param) {
+                                        return (action || (t.type === 'buy' ? '买入' : '卖出')) + 
+                                               '<br>时间: ' + t.date +
+                                               '<br>价格: ' + t.price + 
+                                               '<br>数量: ' + t.size;
+                                    }
+                                }
+                            };
+                        }) : []
                     }
                 },
                 {
                     name: 'MA5',
                     type: 'line',
-                    data: calculateMA(5, data),
+                    data: calculateMA(5, rawData),
                     smooth: true,
-                    lineStyle: { opacity: 0.5 }
+                    showSymbol: false,
+                    lineStyle: { opacity: 0.5, width: 1 }
                 },
                 {
                     name: 'MA10',
                     type: 'line',
-                    data: calculateMA(10, data),
+                    data: calculateMA(10, rawData),
                     smooth: true,
-                    lineStyle: { opacity: 0.5 }
+                    showSymbol: false,
+                    lineStyle: { opacity: 0.5, width: 1 }
                 },
                 {
                     name: 'MA20',
                     type: 'line',
-                    data: calculateMA(20, data),
+                    data: calculateMA(20, rawData),
                     smooth: true,
-                    lineStyle: { opacity: 0.5 }
+                    showSymbol: false,
+                    lineStyle: { opacity: 0.5, width: 1 }
                 },
                 {
                     name: 'MA55',
                     type: 'line',
-                    data: calculateMA(55, data),
+                    data: calculateMA(55, rawData),
                     smooth: true,
-                    lineStyle: { opacity: 0.8, width: 2 }
+                    showSymbol: false,
+                    lineStyle: { opacity: 0.8, width: 2, color: '#FFD700' }
                 },
                 {
                     name: 'Volume',
@@ -352,6 +420,36 @@ const App = () => {
                     xAxisIndex: 1,
                     yAxisIndex: 1,
                     data: volumes
+                },
+                {
+                    name: 'DIF',
+                    type: 'line',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.dif,
+                    showSymbol: false,
+                    lineStyle: { width: 1, color: '#1890ff' }
+                },
+                {
+                    name: 'DEA',
+                    type: 'line',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.dea,
+                    showSymbol: false,
+                    lineStyle: { width: 1, color: '#faad14' }
+                },
+                {
+                    name: 'MACD',
+                    type: 'bar',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.hist,
+                    itemStyle: {
+                        color: function(params) {
+                            return params.value > 0 ? '#ef232a' : '#14b143';
+                        }
+                    }
                 }
             ]
         };
@@ -406,13 +504,18 @@ const App = () => {
                   <Col span={6}>
                     <Card title="策略配置" bordered={false} style={{ height: '100%' }}>
                       <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{
-                        period: 'daily',
+                        date_range: [dayjs('2025-09-01'), dayjs('2025-12-31')],
+                        period: '60',
                         fast_period: 10,
                         slow_period: 20,
                         atr_period: 14,
                         atr_multiplier: 2.0,
                         risk_per_trade: 0.02,
-                        contract_multiplier: 30
+                        contract_multiplier: 30,
+                        ma_period: 55,
+                        macd_fast: 12,
+                        macd_slow: 26,
+                        macd_signal: 9
                       }}>
                         <Form.Item name="symbol" label="交易品种" rules={[{ required: true }]}>
                           <Select 
@@ -431,13 +534,38 @@ const App = () => {
                         </Form.Item>
 
                         <Form.Item label="选择策略">
-                            <Select value={strategyType} onChange={setStrategyType}>
-                                <Option value="TrendFollowingStrategy">趋势跟踪策略 (双均线)</Option>
-                                <Option value="MA55BreakoutStrategy">MA55突破 + MACD背离</Option>
+                            <Select value={strategyType} onChange={(val) => {
+                                setStrategyType(val);
+                                // 切换策略时重置默认值
+                                if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy') {
+                                    form.setFieldsValue({
+                                        ma_period: 55,
+                                        macd_fast: 12,
+                                        macd_slow: 26,
+                                        macd_signal: 9,
+                                        atr_period: 14,
+                                        atr_multiplier: 3.0,
+                                        size_mode: 'atr_risk',
+                                        fixed_size: 1,
+                                        risk_per_trade: 0.02
+                                    });
+                                } else if (val === 'TrendFollowingStrategy') {
+                                    form.setFieldsValue({
+                                        fast_period: 10,
+                                        slow_period: 30,
+                                        atr_period: 14,
+                                        atr_multiplier: 2.0,
+                                        risk_per_trade: 0.02
+                                    });
+                                }
+                            }}>
+                                <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
+                                <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
+                                <Option value="TrendFollowingStrategy">双均线趋势跟踪</Option>
                             </Select>
                         </Form.Item>
                         
-                        <Form.Item label="回测周期" name="period" initialValue="daily">
+                        <Form.Item label="回测周期" name="period">
                           <Select>
                             <Option value="daily">日线</Option>
                             <Option value="60">60分钟</Option>
@@ -466,26 +594,29 @@ const App = () => {
                             </Row>
                         ) : (
                             <>
-                                <Form.Item name="ma_period" label="突破均线周期" initialValue={55}>
+                                <Form.Item name="ma_period" label="突破均线周期">
                                   <Input type="number" />
                                 </Form.Item>
-                                <Row gutter={16}>
-                                    <Col span={8}>
-                                        <Form.Item name="macd_fast" label="MACD快" initialValue={12}>
-                                          <Input type="number" />
-                                        </Form.Item>
-                                    </Col>
-                                    <Col span={8}>
-                                        <Form.Item name="macd_slow" label="MACD慢" initialValue={26}>
-                                          <Input type="number" />
-                                        </Form.Item>
-                                    </Col>
-                                    <Col span={8}>
-                                        <Form.Item name="macd_signal" label="MACD信" initialValue={9}>
-                                          <Input type="number" />
-                                        </Form.Item>
-                                    </Col>
-                                </Row>
+                                
+                                {strategyType === 'MA55BreakoutStrategy' && (
+                                    <Row gutter={16}>
+                                        <Col span={8}>
+                                            <Form.Item name="macd_fast" label="MACD快">
+                                              <Input type="number" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col span={8}>
+                                            <Form.Item name="macd_slow" label="MACD慢">
+                                              <Input type="number" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col span={8}>
+                                            <Form.Item name="macd_signal" label="MACD信">
+                                              <Input type="number" />
+                                            </Form.Item>
+                                        </Col>
+                                    </Row>
+                                )}
                             </>
                         )}
 
@@ -493,7 +624,7 @@ const App = () => {
                           <Input type="number" step="0.1" />
                         </Form.Item>
 
-                        {strategyType === 'MA55BreakoutStrategy' ? (
+                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' ? (
                             <>
                                 <Form.Item name="size_mode" label="开仓模式" initialValue="atr_risk">
                                     <Radio.Group>
@@ -530,9 +661,22 @@ const App = () => {
                         </Form.Item>
                         <Form.Item name="atr_period" hidden><Input /></Form.Item>
 
-                        <Button type="primary" htmlType="submit" loading={loading} block size="large">
-                          开始回测
-                        </Button>
+                        <Form.Item label="自动优化 (若收益<20%)" tooltip="当回测年化收益率低于20%时，系统会自动尝试优化参数以寻找更好的结果。">
+                            <Switch checked={autoOptimize} onChange={setAutoOptimize} />
+                        </Form.Item>
+
+                        <Form.Item>
+                          <Button type="primary" htmlType="submit" loading={loading} block size="large">
+                            开始回测
+                          </Button>
+                        </Form.Item>
+                        <Form.Item>
+                             <Tooltip title="重新运行回测以刷新图表">
+                                <Button icon={<ReloadOutlined />} onClick={form.submit} block>
+                                    刷新图表
+                                </Button>
+                             </Tooltip>
+                        </Form.Item>
                       </Form>
                     </Card>
                   </Col>
@@ -590,7 +734,7 @@ const App = () => {
                                 </Radio.Group>
                             }
                         >
-                          <ReactECharts option={getOption()} style={{ height: 400 }} />
+                          <ReactECharts option={getOption()} style={{ height: 800 }} notMerge={true} />
                         </Card>
                         
                         <Card title="交易日志" bordered={false}>

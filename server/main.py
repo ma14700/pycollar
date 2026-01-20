@@ -45,8 +45,8 @@ class BacktestRequest(BaseModel):
     period: str
     strategy_params: Dict[str, Any]
     auto_optimize: bool = True # 是否开启自动优化
-    start_date: Optional[str] = "2025-01-01" # 开始时间 (YYYY-MM-DD)
-    end_date: Optional[str] = "2026-01-01"   # 结束时间 (YYYY-MM-DD)
+    start_date: Optional[str] = "2025-09-01" # 开始时间 (YYYY-MM-DD)
+    end_date: Optional[str] = "2025-12-31"   # 结束时间 (YYYY-MM-DD)
     strategy_name: str = "TrendFollowingStrategy"
 
 @app.post("/api/backtest")
