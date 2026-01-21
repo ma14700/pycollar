@@ -12,16 +12,15 @@ const { TabPane } = Tabs;
 
 function calculateMA(dayCount, data) {
   var result = [];
+  var sum = 0;
   for (var i = 0, len = data.length; i < len; i++) {
-    if (i < dayCount - 1) {
-      result.push('-');
-      continue;
+    sum += data[i][1];
+    if (i >= dayCount) {
+      sum -= data[i - dayCount][1];
+      result.push((sum / dayCount).toFixed(2));
+    } else {
+      result.push((sum / (i + 1)).toFixed(2));
     }
-    var sum = 0;
-    for (var j = 0; j < dayCount; j++) {
-      sum += data[i - j][1]; // close price
-    }
-    result.push((sum / dayCount).toFixed(2));
   }
   return result;
 }
@@ -62,8 +61,8 @@ const App = () => {
             form.setFieldsValue({ 
                 symbol: defaultSymbol.code, 
                 contract_multiplier: defaultSymbol.multiplier,
-                date_range: [dayjs('2025-08-06'), dayjs('2025-12-15')],
-                period: '60' // 默认小时线
+                date_range: [dayjs('2025-10-01'), dayjs('2025-12-01')],
+                period: 'daily' // 默认日线
             });
             fetchQuote(defaultSymbol.code);
         }
@@ -118,8 +117,8 @@ const App = () => {
       
       // 通用风险参数处理 (适用于支持 size_mode 的策略)
       const getSizeParams = () => {
-          const sizeMode = values.size_mode || 'atr_risk';
-          const fixedSize = values.fixed_size !== undefined ? parseInt(values.fixed_size) : 1;
+          const sizeMode = values.size_mode || 'fixed';
+          const fixedSize = values.fixed_size !== undefined ? parseInt(values.fixed_size) : 20;
           const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
           
           if (sizeMode === 'fixed') {
@@ -153,8 +152,8 @@ const App = () => {
           margin_rate: marginRate,
           contract_multiplier: contractMultiplier,
           use_expma: false,
-          size_mode: values.size_mode || 'atr_risk',
-          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 1
+          size_mode: values.size_mode || 'fixed',
+          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20
         };
       } else if (strategyType === 'MA55BreakoutStrategy') {
         params = {
@@ -167,8 +166,8 @@ const App = () => {
           risk_per_trade: riskPerTrade,
           equity_percent: equityPercent,
           margin_rate: marginRate,
-          size_mode: values.size_mode || 'atr_risk',
-          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 1,
+          size_mode: values.size_mode || 'fixed',
+          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
           contract_multiplier: contractMultiplier,
           use_trailing_stop: false
         };
@@ -180,8 +179,8 @@ const App = () => {
             risk_per_trade: riskPerTrade,
             equity_percent: equityPercent,
             margin_rate: marginRate,
-            size_mode: values.size_mode || 'atr_risk',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 1,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
@@ -194,8 +193,8 @@ const App = () => {
             risk_per_trade: riskPerTrade,
             equity_percent: equityPercent,
             margin_rate: marginRate,
-            size_mode: values.size_mode || 'atr_risk',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 1,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier
         };
       } else if (strategyType === 'MA20MA55PartialTakeProfitStrategy') {
@@ -207,10 +206,23 @@ const App = () => {
             risk_per_trade: riskPerTrade,
             equity_percent: equityPercent,
             margin_rate: marginRate,
-            size_mode: values.size_mode || 'atr_risk',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 1,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier,
             take_profit_points: values.take_profit_points ? parseFloat(values.take_profit_points) : 0
+        };
+      } else if (strategyType === 'DKXStrategy') {
+        params = {
+            dkx_period: 20,
+            dkx_ma_period: 10,
+            atr_period: 14,
+            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
+            risk_per_trade: riskPerTrade,
+            equity_percent: equityPercent,
+            margin_rate: marginRate,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
+            contract_multiplier: contractMultiplier
         };
       }
 
@@ -288,6 +300,184 @@ const App = () => {
         const rawData = results.kline_data?.values || [];
         const volumes = results.kline_data?.volumes || [];
         const macdData = results.kline_data?.macd || { dif: [], dea: [], hist: [] };
+        const dkxData = results.kline_data?.dkx || { dkx: [], madkx: [] };
+        const maData = results.kline_data?.ma || {};
+        const ma5Series = (maData.ma5 && maData.ma5.length === rawData.length) ? maData.ma5 : calculateMA(5, rawData);
+        const ma10Series = (maData.ma10 && maData.ma10.length === rawData.length) ? maData.ma10 : calculateMA(10, rawData);
+        const ma20Series = (maData.ma20 && maData.ma20.length === rawData.length) ? maData.ma20 : calculateMA(20, rawData);
+        const ma55Series = (maData.ma55 && maData.ma55.length === rawData.length) ? maData.ma55 : calculateMA(55, rawData);
+        const showDKX = strategyType === 'DKXStrategy';
+
+        const legendData = ['K线', 'MA5', 'MA10', 'MA20', 'MA55', 'DIF', 'DEA', 'MACD'];
+        if (showDKX && dkxData.dkx.length > 0) {
+            legendData.push('DKX', 'MADKX');
+        }
+
+        const seriesList = [
+            {
+                name: 'K线',
+                type: 'candlestick',
+                data: rawData,
+                itemStyle: {
+                    color: '#ef232a',
+                    color0: '#14b143',
+                    borderColor: '#ef232a',
+                    borderColor0: '#14b143'
+                },
+                markPoint: {
+                    label: {
+                        normal: {
+                            formatter: function (param) {
+                                const data = param.data;
+                                let displaySize = Math.abs(data.tradeSize);
+                                // 如果是反手操作，显示持仓量而不是交易量（避免用户混淆 20 vs 40）
+                                if (data.name && data.name.includes('反手') && data.position) {
+                                    displaySize = Math.abs(data.position);
+                                }
+                                return (param.name || '') + '\n' + displaySize + '手';
+                            },
+                            fontSize: 11,
+                            fontWeight: 'bold'
+                        }
+                    },
+                    data: results.trades ? results.trades.map(t => {
+                        // 根据 action 决定颜色和图标方向
+                        const action = t.action || '';
+                        let color = '#5470c6'; // 默认卖出颜色 (平多/卖空)
+                        let symbolRotate = 180;
+                        
+                        // 修正判断逻辑：包含“买”或者是“反手做多” -> 红色
+                        if (action.includes('买') || action === '平空' || action === '反手做多') {
+                            color = '#ef232a';
+                            symbolRotate = 0;
+                        }
+                        
+                        // 反手做空 -> 绿色
+                        if (action === '反手做空') {
+                            color = '#5470c6';
+                            symbolRotate = 180;
+                        }
+
+                        return {
+                            name: action || (t.type === 'buy' ? '买入' : '卖出'),
+                            coord: [t.date, t.price],
+                            value: t.price,
+                            tradeSize: t.size,
+                            position: t.position,
+                            symbol: 'arrow',
+                            symbolSize: 12,
+                            symbolRotate: symbolRotate,
+                            symbolOffset: [0, (action.includes('买') || action === '平空' || action === '反手做多') ? 10 : -10],
+                            itemStyle: {
+                                color: color
+                            },
+                            tooltip: {
+                                formatter: function (param) {
+                                    let sizeDisplay = t.size;
+                                    if (action.includes('反手') && t.position) {
+                                        sizeDisplay = `${t.size} (目标持仓: ${t.position})`;
+                                    }
+                                    return (action || (t.type === 'buy' ? '买入' : '卖出')) + 
+                                           '<br>时间: ' + t.date +
+                                           '<br>价格: ' + t.price + 
+                                           '<br>数量: ' + sizeDisplay;
+                                }
+                            }
+                        };
+                    }) : []
+                }
+            },
+            {
+                name: 'MA5',
+                type: 'line',
+                data: ma5Series,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { opacity: 0.5, width: 1 }
+            },
+            {
+                name: 'MA10',
+                type: 'line',
+                data: ma10Series,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { opacity: 0.5, width: 1 }
+            },
+            {
+                name: 'MA20',
+                type: 'line',
+                data: ma20Series,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { opacity: 0.8, width: 2, color: 'red' }
+            },
+            {
+                name: 'MA55',
+                type: 'line',
+                data: ma55Series,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { opacity: 0.8, width: 2, color: '#999' }
+            },
+            {
+                name: 'Volume',
+                type: 'bar',
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumes
+            },
+            {
+                name: 'DIF',
+                type: 'line',
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.dif,
+                showSymbol: false,
+                lineStyle: { width: 1, color: '#1890ff' }
+            },
+            {
+                name: 'DEA',
+                type: 'line',
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.dea,
+                showSymbol: false,
+                lineStyle: { width: 1, color: '#faad14' }
+            },
+            {
+                name: 'MACD',
+                type: 'bar',
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.hist,
+                itemStyle: {
+                    color: function(params) {
+                        return params.value > 0 ? '#ef232a' : '#14b143';
+                    }
+                }
+            }
+        ];
+
+        if (showDKX && dkxData.dkx.length > 0) {
+            seriesList.push({
+                name: 'DKX',
+                type: 'line',
+                data: dkxData.dkx,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 2, color: '#722ed1', type: 'solid' },
+                z: 5
+            });
+            seriesList.push({
+                name: 'MADKX',
+                type: 'line',
+                data: dkxData.madkx,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 2, color: '#fa8c16', type: 'dashed' },
+                z: 5
+            });
+        }
 
         return {
             title: { text: 'K线图 & 交易信号' },
@@ -298,10 +488,12 @@ const App = () => {
                 }
             },
             legend: {
-                data: ['K线', 'MA5', 'MA10', 'MA20', 'MA55', 'DIF', 'DEA', 'MACD'],
+                data: legendData,
                 selected: {
                     'MA5': false,
-                    'MA10': false
+                    'MA10': false,
+                    'MA20': !showDKX,
+                    'MA55': !showDKX
                 }
             },
             grid: [
@@ -309,18 +501,18 @@ const App = () => {
                     left: '3%',
                     right: '4%',
                     top: '5%',
-                    height: '55%' // K线图高度
+                    height: '55%'
                 },
                 {
                     left: '3%',
                     right: '4%',
-                    top: '63%', // Volume图位置
+                    top: '63%',
                     height: '10%'
                 },
                 {
                     left: '3%',
                     right: '4%',
-                    top: '76%', // MACD图位置
+                    top: '76%',
                     height: '15%'
                 }
             ],
@@ -388,150 +580,7 @@ const App = () => {
                     end: 100
                 }
             ],
-            series: [
-                {
-                    name: 'K线',
-                    type: 'candlestick',
-                    data: rawData,
-                    itemStyle: {
-                        color: '#ef232a',
-                        color0: '#14b143',
-                        borderColor: '#ef232a',
-                        borderColor0: '#14b143'
-                    },
-                    markPoint: {
-                        label: {
-                            normal: {
-                                formatter: function (param) {
-                                    const data = param.data;
-                                    let displaySize = Math.abs(data.tradeSize);
-                                    // 如果是反手操作，显示持仓量而不是交易量（避免用户混淆 20 vs 40）
-                                    if (data.name && data.name.includes('反手') && data.position) {
-                                        displaySize = Math.abs(data.position);
-                                    }
-                                    return (param.name || '') + '\n' + displaySize + '手';
-                                },
-                                fontSize: 11,
-                                fontWeight: 'bold'
-                            }
-                        },
-                        data: results.trades ? results.trades.map(t => {
-                            // 根据 action 决定颜色和图标方向
-                            const action = t.action || '';
-                            let color = '#5470c6'; // 默认卖出颜色 (平多/卖空)
-                            let symbolRotate = 180;
-                            
-                            // 修正判断逻辑：包含“买”或者是“反手做多” -> 红色
-                            if (action.includes('买') || action === '平空' || action === '反手做多') {
-                                color = '#ef232a';
-                                symbolRotate = 0;
-                            }
-                            
-                            // 反手做空 -> 绿色
-                            if (action === '反手做空') {
-                                color = '#5470c6';
-                                symbolRotate = 180;
-                            }
-
-                            return {
-                                name: action || (t.type === 'buy' ? '买入' : '卖出'),
-                                coord: [t.date, t.price],
-                                value: t.price,
-                                tradeSize: t.size,
-                                position: t.position,
-                                symbol: 'arrow',
-                                symbolSize: 12,
-                                symbolRotate: symbolRotate,
-                                symbolOffset: [0, (action.includes('买') || action === '平空' || action === '反手做多') ? 10 : -10],
-                                itemStyle: {
-                                    color: color
-                                },
-                                tooltip: {
-                                    formatter: function (param) {
-                                        let sizeDisplay = t.size;
-                                        if (action.includes('反手') && t.position) {
-                                            sizeDisplay = `${t.size} (目标持仓: ${t.position})`;
-                                        }
-                                        return (action || (t.type === 'buy' ? '买入' : '卖出')) + 
-                                               '<br>时间: ' + t.date +
-                                               '<br>价格: ' + t.price + 
-                                               '<br>数量: ' + sizeDisplay;
-                                    }
-                                }
-                            };
-                        }) : []
-                    }
-                },
-                {
-                    name: 'MA5',
-                    type: 'line',
-                    data: calculateMA(5, rawData),
-                    smooth: true,
-                    showSymbol: false,
-                    lineStyle: { opacity: 0.5, width: 1 }
-                },
-                {
-                    name: 'MA10',
-                    type: 'line',
-                    data: calculateMA(10, rawData),
-                    smooth: true,
-                    showSymbol: false,
-                    lineStyle: { opacity: 0.5, width: 1 }
-                },
-                {
-                    name: 'MA20',
-                    type: 'line',
-                    data: calculateMA(20, rawData),
-                    smooth: true,
-                    showSymbol: false,
-                    lineStyle: { opacity: 0.8, width: 2, color: 'red' }
-                },
-                {
-                    name: 'MA55',
-                    type: 'line',
-                    data: calculateMA(55, rawData),
-                    smooth: true,
-                    showSymbol: false,
-                    lineStyle: { opacity: 0.8, width: 2, color: '#999' }
-                },
-                {
-                    name: 'Volume',
-                    type: 'bar',
-                    xAxisIndex: 1,
-                    yAxisIndex: 1,
-                    data: volumes
-                },
-                {
-                    name: 'DIF',
-                    type: 'line',
-                    xAxisIndex: 2,
-                    yAxisIndex: 2,
-                    data: macdData.dif,
-                    showSymbol: false,
-                    lineStyle: { width: 1, color: '#1890ff' }
-                },
-                {
-                    name: 'DEA',
-                    type: 'line',
-                    xAxisIndex: 2,
-                    yAxisIndex: 2,
-                    data: macdData.dea,
-                    showSymbol: false,
-                    lineStyle: { width: 1, color: '#faad14' }
-                },
-                {
-                    name: 'MACD',
-                    type: 'bar',
-                    xAxisIndex: 2,
-                    yAxisIndex: 2,
-                    data: macdData.hist,
-                    itemStyle: {
-                        color: function(params) {
-                            return params.value > 0 ? '#ef232a' : '#14b143';
-                        }
-                    }
-                }
-            ]
+            series: seriesList
         };
     }
 
@@ -585,8 +634,8 @@ const App = () => {
                     <Card title="策略配置" bordered={false} style={{ height: '100%' }}>
                       <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{
                         initial_cash: 1000000,
-                        date_range: [dayjs('2025-08-06'), dayjs('2025-12-15')],
-                        period: '60',
+                        date_range: [dayjs('2025-10-01'), dayjs('2025-12-01')],
+                        period: 'daily',
                         fast_period: 10,
                         slow_period: 20,
                         atr_period: 14,
@@ -663,8 +712,8 @@ const App = () => {
                                     let initialValues = {
                                         atr_period: 14,
                                         atr_multiplier: 3.0,
-                                        size_mode: 'atr_risk',
-                                        fixed_size: 1,
+                                        size_mode: 'fixed',
+                                        fixed_size: 20,
                                         risk_per_trade: 0.02
                                     };
                                     
@@ -690,12 +739,23 @@ const App = () => {
                                         atr_multiplier: 2.0,
                                         risk_per_trade: 0.02
                                     });
+                                } else if (val === 'DKXStrategy') {
+                                    form.setFieldsValue({
+                                        dkx_period: 20,
+                                        dkx_ma_period: 10,
+                                        atr_period: 14,
+                                        atr_multiplier: 3.0,
+                                        size_mode: 'fixed',
+                                        fixed_size: 20,
+                                        risk_per_trade: 0.02
+                                    });
                                 }
                             }}>
                                 <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                                 <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                                 <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉</Option>
                                 <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
+                                <Option value="DKXStrategy">DKX多空线策略</Option>
                                 <Option value="TrendFollowingStrategy">双均线趋势跟踪</Option>
                             </Select>
                         </Form.Item>
@@ -734,6 +794,19 @@ const App = () => {
                                     </Form.Item>
                                 )}
                             </>
+                        ) : strategyType === 'DKXStrategy' ? (
+                             <Row gutter={16}>
+                                 <Col span={12}>
+                                     <Form.Item name="dkx_period" label="DKX周期" tooltip="通常为20">
+                                       <Input type="number" />
+                                     </Form.Item>
+                                 </Col>
+                                 <Col span={12}>
+                                     <Form.Item name="dkx_ma_period" label="MADKX周期" tooltip="通常为10">
+                                       <Input type="number" />
+                                     </Form.Item>
+                                 </Col>
+                             </Row>
                         ) : (
                             <>
                                 <Form.Item name="ma_period" label="突破均线周期">
@@ -781,9 +854,9 @@ const App = () => {
                             }}
                         </Form.Item>
 
-                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' ? (
+                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' ? (
                             <>
-                                <Form.Item name="size_mode" label="开仓模式" initialValue="atr_risk">
+                                <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                                     <Radio.Group>
                                         <Radio value="fixed">固定手数</Radio>
                                         <Radio value="equity_percent">固定资金比例</Radio>
@@ -798,7 +871,7 @@ const App = () => {
                                         const mode = getFieldValue('size_mode');
                                         if (mode === 'fixed') {
                                             return (
-                                                <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={1}>
+                                                <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={20}>
                                                     <Input type="number" />
                                                 </Form.Item>
                                             );

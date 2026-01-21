@@ -1,5 +1,6 @@
 import backtrader as bt
 import datetime
+import pandas as pd
 
 class TrendFollowingStrategy(bt.Strategy):
     """
@@ -17,6 +18,10 @@ class TrendFollowingStrategy(bt.Strategy):
         ('contract_multiplier', 1), # 合约乘数 (期货使用)
         ('use_expma', False),     # 是否使用指数移动平均 (EXPMA)
         ('print_log', True),      # 是否打印日志
+        ('size_mode', 'fixed'), # 开仓模式: 'fixed', 'equity_percent', 'atr_risk'
+        ('fixed_size', 20),       # 固定手数
+        ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
+        ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
     )
 
     def log(self, txt, dt=None):
@@ -49,6 +54,34 @@ class TrendFollowingStrategy(bt.Strategy):
         # 交易状态变量
         self.stop_price = None  # 止损价格
         self.order = None       # 当前挂单
+
+    def _calculate_size(self, value):
+        atr_val = self.atr[0]
+        close = self.datas[0].close[0]
+        mode = self.params.size_mode
+        size = 0
+        if mode == 'fixed':
+            try:
+                size = int(self.params.fixed_size) if self.params.fixed_size is not None else 0
+            except (ValueError, TypeError):
+                size = 0
+        elif mode == 'equity_percent':
+            target_value = value * self.params.equity_percent
+            one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+            size = int(target_value / one_hand_margin) if one_hand_margin > 0 else 0
+        else:
+            stop_dist = atr_val * self.params.atr_multiplier
+            risk_amt = value * self.params.risk_per_trade
+            risk_unit = stop_dist * self.params.contract_multiplier
+            size = int(risk_amt / risk_unit) if risk_unit > 0 else 0
+        if size <= 0:
+            fallback = 0
+            try:
+                fallback = int(self.params.fixed_size) if self.params.fixed_size is not None else 0
+            except (ValueError, TypeError):
+                fallback = 0
+            size = fallback if fallback > 0 else 1
+        return size
 
     def start(self):
         if self.params.print_log:
@@ -113,9 +146,19 @@ class TrendFollowingStrategy(bt.Strategy):
         # 计算累计收益
         total_pnl = self.broker.get_value() - self.broker.startingcash
         
-        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
+        # 计算本次交易前的累计盈亏，以便展示变化
+        prev_total_pnl = total_pnl - trade.pnlcomm
+        
+        self.log(f'交易结束: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f})')
+        self.log(f'账户资金变动: {prev_total_pnl:.2f} (前值) + {trade.pnlcomm:.2f} (本次) = {total_pnl:.2f} (当前总盈亏)')
 
     def next(self):
+        # 0. 严格的时间窗口控制
+        if self.start_date:
+            current_date = self.datas[0].datetime.date(0)
+            if current_date < self.start_date:
+                return
+
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
             if self.position:
@@ -137,49 +180,104 @@ class TrendFollowingStrategy(bt.Strategy):
 
         # 1. 没有持仓
         if not self.position:
-            # 金叉买入
+            # 金叉买入 (做多)
             if self.crossover > 0:
                 # 计算止损距离
                 atr_value = self.atr[0]
                 stop_dist = atr_value * self.params.atr_multiplier
                 self.stop_price = self.datas[0].close[0] - stop_dist
                 
-                # 计算仓位大小 (基于风险)
-                # Risk Amount = Size * (Entry - Stop) * Multiplier
-                # Size = Risk Amount / ((Entry - Stop) * Multiplier)
-                risk_amount = value * self.params.risk_per_trade
-                risk_per_unit = stop_dist * self.params.contract_multiplier
-                
-                size = 0
-                if risk_per_unit > 0:
-                    size = int(risk_amount / risk_per_unit)
-                    # 调试日志
-                    # self.log(f'计算仓位: 权益{value:.0f}, 风险金{risk_amount:.0f}, ATR{atr_value:.1f}, 止损距{stop_dist:.1f}, 单手风险{risk_per_unit:.1f}, 数量{size}')
+                size = self._calculate_size(value)
                 
                 if size > 0:
-                    self.log(f'买入信号: 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {size}')
+                    self.log(f'买入信号 (金叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {size}')
                     self.order = self.buy(size=size)
+            
+            # 死叉卖出 (做空)
+            elif self.crossover < 0:
+                # 计算止损距离 (空单止损在上方)
+                atr_value = self.atr[0]
+                stop_dist = atr_value * self.params.atr_multiplier
+                self.stop_price = self.datas[0].close[0] + stop_dist
+                
+                size = self._calculate_size(value)
+                
+                if size > 0:
+                    self.log(f'卖空信号 (死叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {-size}')
+                    self.order = self.sell(size=size)
                     
         # 2. 持有仓位
         else:
-            # 死叉卖出平仓
-            if self.crossover < 0:
-                self.log(f'卖出信号 (死叉): 收盘价 {self.datas[0].close[0]:.2f}')
-                self.order = self.close()
-            
-            # 移动止损逻辑
-            else:
-                # 如果价格上涨，提高止损线 (只升不降)
-                atr_value = self.atr[0]
-                new_stop_price = self.datas[0].close[0] - (atr_value * self.params.atr_multiplier)
+            # 持有多单
+            if self.position.size > 0:
+                # 死叉: 平多单 + 开空单 (反手)
+                if self.crossover < 0:
+                    self.log(f'反手信号 (死叉): 收盘价 {self.datas[0].close[0]:.2f}, 平多开空')
+                    
+                    # 1. 计算新空单仓位
+                    atr_value = self.atr[0]
+                    stop_dist = atr_value * self.params.atr_multiplier
+                    self.stop_price = self.datas[0].close[0] + stop_dist
+                    size = self._calculate_size(value)
+                    
+                    if size > 0:
+                        # order_target_size 会自动处理平仓+开新仓
+                        self.order = self.order_target_size(target=-size)
+                    else:
+                        self.order = self.close() # 无法开新仓则仅平仓
                 
-                if self.stop_price and new_stop_price > self.stop_price:
-                    self.stop_price = new_stop_price
+                # 移动止损逻辑
+                else:
+                    # 如果价格上涨，提高止损线 (只升不降)
+                    atr_value = self.atr[0]
+                    new_stop_price = self.datas[0].close[0] - (atr_value * self.params.atr_multiplier)
+                    
+                    if self.stop_price and new_stop_price > self.stop_price:
+                        self.stop_price = new_stop_price
+                    
+                    # 检查是否触发止损
+                    if self.datas[0].close[0] < self.stop_price:
+                        self.log(f'多单止损触发: 当前价 {self.datas[0].close[0]:.2f} < 止损价 {self.stop_price:.2f}')
+                        self.order = self.close()
+
+            # 持有空单
+            elif self.position.size < 0:
+                # 金叉: 平空单 + 开多单 (反手)
+                if self.crossover > 0:
+                    self.log(f'反手信号 (金叉): 收盘价 {self.datas[0].close[0]:.2f}, 平空开多')
+                    
+                    # 1. 计算新多单仓位
+                    atr_value = self.atr[0]
+                    stop_dist = atr_value * self.params.atr_multiplier
+                    self.stop_price = self.datas[0].close[0] - stop_dist
+                    size = self._calculate_size(value)
+                    
+                    if size > 0:
+                        self.order = self.order_target_size(target=size)
+                    else:
+                        self.order = self.close()
                 
-                # 检查是否触发止损
-                if self.datas[0].close[0] < self.stop_price:
-                    self.log(f'止损触发: 当前价 {self.datas[0].close[0]:.2f} < 止损价 {self.stop_price:.2f}')
-                    self.order = self.close()
+                # 移动止损逻辑
+                else:
+                    # 如果价格下跌，降低止损线 (只降不升)
+                    atr_value = self.atr[0]
+                    new_stop_price = self.datas[0].close[0] + (atr_value * self.params.atr_multiplier)
+                    
+                    # 空单止损价是下降才更新 (越低越好，类似于多单越高越好)
+                    # Wait, trailing stop for short: Stop price should move DOWN as price moves DOWN.
+                    # Stop price is above current price.
+                    # If Price = 100, Stop = 110.
+                    # Price moves to 90, New Stop = 100. (Move down)
+                    # So if new_stop_price < self.stop_price, update.
+                    
+                    if self.stop_price is None or new_stop_price < self.stop_price:
+                        self.stop_price = new_stop_price
+                    
+                    # 检查是否触发止损 (价格上涨超过止损价)
+                    if self.datas[0].close[0] > self.stop_price:
+                        self.log(f'空单止损触发: 当前价 {self.datas[0].close[0]:.2f} > 止损价 {self.stop_price:.2f}')
+                        self.order = self.close()
+
 
 class MA55BreakoutStrategy(bt.Strategy):
     """
@@ -311,9 +409,19 @@ class MA55BreakoutStrategy(bt.Strategy):
         # 计算累计收益
         total_pnl = self.broker.get_value() - self.broker.startingcash
         
-        self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
+        # 计算本次交易前的累计盈亏，以便展示变化
+        prev_total_pnl = total_pnl - trade.pnlcomm
+
+        self.log(f'交易结束: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f})')
+        self.log(f'账户资金变动: {prev_total_pnl:.2f} (前值) + {trade.pnlcomm:.2f} (本次) = {total_pnl:.2f} (当前总盈亏)')
 
     def next(self):
+        # 0. 严格的时间窗口控制
+        if self.start_date:
+            current_date = self.datas[0].datetime.date(0)
+            if current_date < self.start_date:
+                return
+
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
             if self.position:
@@ -616,6 +724,13 @@ class MA55TouchExitStrategy(bt.Strategy):
         self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
 
     def next(self):
+        # 0. 严格的时间窗口控制
+        if self.start_date:
+            current_date = self.datas[0].datetime.date(0)
+            if current_date < self.start_date:
+                # print(f"DEBUG: Skipping date {current_date} < {self.start_date}")
+                return
+
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
             if self.position:
@@ -756,6 +871,7 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
         ('atr_period', 14),      # ATR 周期 (仅用于计算仓位)
         ('atr_multiplier', 3.0), # ATR 止损倍数 (仅用于计算仓位)
         ('print_log', True),     # 打印日志
+        ('start_date', None),    # 强制回测开始日期 (在此之前只计算指标不交易)
     )
 
     def log(self, txt, dt=None):
@@ -765,11 +881,30 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
 
     def __init__(self):
         super(MA20MA55CrossoverStrategy, self).__init__()
-        # 均线
-        self.ma_fast = bt.indicators.SimpleMovingAverage(
-            self.datas[0], period=self.params.fast_period)
-        self.ma_slow = bt.indicators.SimpleMovingAverage(
-            self.datas[0], period=self.params.slow_period)
+        
+        # 解析 start_date
+        self.start_date = None
+        if self.params.start_date:
+            try:
+                if isinstance(self.params.start_date, str):
+                    self.start_date = pd.to_datetime(self.params.start_date).date()
+                else:
+                    self.start_date = self.params.start_date
+            except:
+                pass
+        
+        # 尝试使用 DataFeed 中预计算的 MA (消除预热期)
+        has_precalc_ma = hasattr(self.datas[0], 'ma_fast') and hasattr(self.datas[0], 'ma_slow')
+        
+        if has_precalc_ma:
+            self.ma_fast = self.datas[0].ma_fast
+            self.ma_slow = self.datas[0].ma_slow
+        else:
+            # 均线 (标准计算，有预热期)
+            self.ma_fast = bt.indicators.SimpleMovingAverage(
+                self.datas[0], period=self.params.fast_period)
+            self.ma_slow = bt.indicators.SimpleMovingAverage(
+                self.datas[0], period=self.params.slow_period)
         
         self.atr = bt.indicators.ATR(self.datas[0], period=self.params.atr_period)
         
@@ -842,6 +977,13 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
         self.log(f'交易利润: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f}), 累计收益: {total_pnl:.2f}')
 
     def next(self):
+        # 0. 严格的时间窗口控制
+        if self.start_date:
+            current_date = self.datas[0].datetime.date(0)
+            if current_date < self.start_date:
+                # print(f"DEBUG: Skipping date {current_date} < {self.start_date}")
+                return
+
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
             if self.position:
@@ -872,7 +1014,22 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
                 self.log(f'执行做多/反手做多: 目标持仓 {size}')
                 self.order = self.order_target_size(target=size)
             else:
-                self.log(f'金叉触发但计算仓位为0. Value: {value:.2f}, Close: {self.datas[0].close[0]:.2f}')
+                # 详细诊断日志
+                close = self.datas[0].close[0]
+                mode = self.params.size_mode
+                if mode == 'fixed':
+                    self.log(f'金叉触发但计算仓位为0 [fixed]。请检查 fixed_size={self.params.fixed_size}')
+                elif mode == 'equity_percent':
+                    target_value = value * self.params.equity_percent
+                    one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                    self.log(f'金叉触发但计算仓位为0 [equity_percent]。target_value={target_value:.2f}, one_hand_margin={one_hand_margin:.2f}, multiplier={self.params.contract_multiplier}, margin_rate={self.params.margin_rate}')
+                else:
+                    atr_val = self.atr[0]
+                    multiplier = self.params.atr_multiplier if self.params.atr_multiplier is not None else 3.0
+                    stop_dist = atr_val * multiplier
+                    risk_amt = value * self.params.risk_per_trade
+                    risk_unit = stop_dist * self.params.contract_multiplier
+                    self.log(f'金叉触发但计算仓位为0 [atr_risk]。risk_amt={risk_amt:.2f}, stop_dist={stop_dist:.4f}, contract_mult={self.params.contract_multiplier}, risk_unit={risk_unit:.2f}, close={close:.2f}')
 
         # 2. 死叉: 20 < 55
         elif self.crossover < 0:
@@ -885,7 +1042,22 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
                 self.log(f'执行做空/反手做空: 目标持仓 {-size}')
                 self.order = self.order_target_size(target=-size)
             else:
-                self.log(f'死叉触发但计算仓位为0. Value: {value:.2f}, Close: {self.datas[0].close[0]:.2f}')
+                # 详细诊断日志
+                close = self.datas[0].close[0]
+                mode = self.params.size_mode
+                if mode == 'fixed':
+                    self.log(f'死叉触发但计算仓位为0 [fixed]。请检查 fixed_size={self.params.fixed_size}')
+                elif mode == 'equity_percent':
+                    target_value = value * self.params.equity_percent
+                    one_hand_margin = close * self.params.contract_multiplier * self.params.margin_rate
+                    self.log(f'死叉触发但计算仓位为0 [equity_percent]。target_value={target_value:.2f}, one_hand_margin={one_hand_margin:.2f}, multiplier={self.params.contract_multiplier}, margin_rate={self.params.margin_rate}')
+                else:
+                    atr_val = self.atr[0]
+                    multiplier = self.params.atr_multiplier if self.params.atr_multiplier is not None else 3.0
+                    stop_dist = atr_val * multiplier
+                    risk_amt = value * self.params.risk_per_trade
+                    risk_unit = stop_dist * self.params.contract_multiplier
+                    self.log(f'死叉触发但计算仓位为0 [atr_risk]。risk_amt={risk_amt:.2f}, stop_dist={stop_dist:.4f}, contract_mult={self.params.contract_multiplier}, risk_unit={risk_unit:.2f}, close={close:.2f}')
         
         # 调试日志：每100根K线打印一次状态，确认策略在运行
         # if len(self) % 100 == 0:
@@ -1010,3 +1182,116 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
                     else:
                         self.order = self.buy(size=exit_size)
                     self.partial_exit_executed = True
+
+class DKX(bt.Indicator):
+    """
+    DKX (多空线) 指标 - 递归实现
+    MID = (3*CLOSE + LOW + OPEN + HIGH) / 6
+    DKX = SMA(MID, 20, 1)  (注意: 这里 SMA 是加权移动平均的一种，类似于 EMA)
+    """
+    lines = ('dkx',)
+    params = (('period', 20),)
+
+    def __init__(self):
+        # 计算 MID
+        self.mid = (3 * self.data.close + self.data.low + self.data.open + self.data.high) / 6.0
+
+    def next(self):
+        if len(self) == 1:
+            self.lines.dkx[0] = self.mid[0]
+        else:
+            # SMA(X, N, 1) = (1*X + (N-1)*Y') / N
+            n = self.params.period
+            self.lines.dkx[0] = (self.mid[0] + (n - 1) * self.lines.dkx[-1]) / n
+
+class DKX_Indicator(bt.Indicator):
+    lines = ('dkx', 'madkx',)
+    params = (('period', 20), ('ma_period', 10),)
+    
+    def __init__(self):
+        # 使用递归实现的 DKX (无预热延迟)
+        self.lines.dkx = DKX(self.data, period=self.params.period)
+        
+        # MADKX = SimpleMovingAverage(DKX, 10)
+        self.lines.madkx = bt.indicators.SimpleMovingAverage(
+            self.lines.dkx, period=self.params.ma_period
+        )
+
+
+class DKXStrategy(MA20MA55CrossoverStrategy):
+    """
+    DKX 多空线策略
+    1. 计算 DKX 和 MADKX
+    2. 交易信号：
+       - 金叉 (DKX > MADKX): 做多 (若持有空单则反手)
+       - 死叉 (DKX < MADKX): 做空 (若持有多单则反手)
+    """
+    params = (
+        ('dkx_period', 20),      # DKX 计算周期 (用于 SMA(MID, N, 1))
+        ('dkx_ma_period', 10),   # MADKX 均线周期
+        # 继承其他参数: risk_per_trade, equity_percent, etc.
+    )
+
+    def __init__(self):
+        # 注意: 这里不调用 super().__init__()，因为父类会初始化 MA20/MA55，我们不需要
+        # 但是我们需要父类的 log 方法等。
+        # 最好直接继承 bt.Strategy 然后把通用逻辑抽出来，或者为了省事，
+        # 我们还是调用 super 但忽略它的 MA 信号，改用自己的。
+        # 不过 MA20MA55CrossoverStrategy 的 __init__ 里写死了 MA20/55。
+        # 所以最好重新写一个 __init__。
+        
+        # 调用更上层的父类 TrendFollowingStrategy (如果有) 或者 bt.Strategy
+        # 这里 MA20MA55CrossoverStrategy 继承自 bt.Strategy (根据之前的代码 Read)
+        # 等等，之前的 Read 显示: class MA20MA55CrossoverStrategy(bt.Strategy):
+        
+        bt.Strategy.__init__(self) # 显式调用基类
+        
+        # DKX 指标
+        self.dkx_ind = DKX_Indicator(
+            self.datas[0], 
+            period=self.params.dkx_period, 
+            ma_period=self.params.dkx_ma_period
+        )
+        
+        self.atr = bt.indicators.ATR(self.datas[0], period=self.params.atr_period)
+        
+        # 交叉信号: DKX 上穿/下穿 MADKX
+        self.crossover = bt.indicators.CrossOver(self.dkx_ind.dkx, self.dkx_ind.madkx)
+        
+        self.order = None
+
+    def next(self):
+        # 强制在回测结束前平仓
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
+        if self.order:
+            return
+
+        value = self.broker.get_value()
+        
+        # 1. 金叉: DKX > MADKX
+        if self.crossover > 0:
+            self.log(f'DKX金叉信号 (DKX > MADKX): {self.dkx_ind.dkx[0]:.2f} > {self.dkx_ind.madkx[0]:.2f}')
+            
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做多/反手做多: 目标持仓 {size}')
+                self.order = self.order_target_size(target=size)
+            else:
+                self.log(f'DKX金叉触发但计算仓位为0')
+
+        # 2. 死叉: DKX < MADKX
+        elif self.crossover < 0:
+            self.log(f'DKX死叉信号 (DKX < MADKX): {self.dkx_ind.dkx[0]:.2f} < {self.dkx_ind.madkx[0]:.2f}')
+            
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做空/反手做空: 目标持仓 {-size}')
+                self.order = self.order_target_size(target=-size)
+            else:
+                self.log(f'DKX死叉触发但计算仓位为0')
+

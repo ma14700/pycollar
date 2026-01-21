@@ -5,8 +5,16 @@ import importlib
 from .data_loader import fetch_futures_data
 from . import strategy
 
+class StrategyData(bt.feeds.PandasData):
+    lines = ('ma_fast', 'ma_slow',)
+    params = (
+        ('ma_fast', 'ma_fast'),
+        ('ma_slow', 'ma_slow'),
+    )
+
 class BacktestEngine:
     def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
+        print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
         importlib.reload(strategy)
         
@@ -24,10 +32,10 @@ class BacktestEngine:
         # 继承策略以捕获日志 (动态继承)
         class LoggingStrategy(StrategyClass):
             def __init__(self):
-                # 务必调用父类 init
-                super().__init__()
+                super(LoggingStrategy, self).__init__()
                 self.logs = []
                 self.trades_history = []
+                self.exec_start_dt = None  # 执行窗口起始日期 (仅记录窗口内的日志与交易)
 
             def start(self):
                 # 确保列表已初始化（防止某些情况下 __init__ 属性丢失）
@@ -35,7 +43,12 @@ class BacktestEngine:
                     self.logs = []
                 if not hasattr(self, 'trades_history'):
                     self.trades_history = []
-                
+                # 设置执行起始窗口 (以便过滤预热期事件)
+                try:
+                    if start_date:
+                        self.exec_start_dt = pd.to_datetime(start_date).date()
+                except Exception:
+                    self.exec_start_dt = None
                 # 调用父类的 start (如果有)
                 if hasattr(super(), 'start'):
                     super().start()
@@ -43,7 +56,16 @@ class BacktestEngine:
             def log(self, txt, dt=None):
                 if not hasattr(self, 'logs'):
                     self.logs = []
-                dt = dt or self.datas[0].datetime.date(0)
+                # 计算当前日志日期
+                dt_cur = dt or self.datas[0].datetime.date(0)
+                # 如果是策略启动类日志，将日期对齐到用户选择的窗口开始日
+                if isinstance(txt, str) and self.exec_start_dt:
+                    if ('策略启动' in txt or '回测开始' in txt):
+                        dt_cur = self.exec_start_dt
+                    # 过滤预热期的日志（窗口外不记录）
+                # if dt_cur < self.exec_start_dt:
+                #    return
+                dt = dt_cur
                 log_entry = f'{dt.isoformat()}, {txt}'
                 self.logs.append(log_entry)
                 # 同时打印到控制台以便调试
@@ -54,7 +76,13 @@ class BacktestEngine:
                     self.trades_history = []
                     
                 if order.status in [order.Completed]:
-                    dt = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d %H:%M:%S')
+                    dt_dt = self.datas[0].datetime.datetime(0)
+                    # 过滤窗口外订单事件 - 暂时移除，改为后期统一过滤，以便保留跨窗口交易的开仓记录
+                    # if self.exec_start_dt and dt_dt.date() < self.exec_start_dt:
+                    #    # 仍调用父类以维持引擎状态，但不记录交易历史
+                    #    super().notify_order(order)
+                    #    return
+                    dt = dt_dt.strftime('%Y-%m-%d %H:%M:%S')
                     
                     size = order.executed.size
                     price = order.executed.price
@@ -92,15 +120,45 @@ class BacktestEngine:
         cerebro = bt.Cerebro()
         
         # 1. 加载数据
+        data_warning = None
         try:
-            df = fetch_futures_data(symbol=symbol, period=period, start_date=start_date, end_date=end_date)
+            # 自动调整开始日期以包含预热期 (日线与分钟线均尝试预热)
+            # 这样可以防止因数据过短导致指标无法计算
+            fetch_start_date = start_date
+            if start_date:
+                warmup_days = 150
+                if 'slow_period' in strategy_params:
+                    try:
+                        slow_p = int(strategy_params['slow_period'])
+                        warmup_days = max(warmup_days, slow_p * 3)
+                    except:
+                        pass
+                req_dt = pd.to_datetime(start_date)
+                fetch_start_dt = req_dt - pd.Timedelta(days=warmup_days)
+                fetch_start_date = fetch_start_dt.strftime('%Y-%m-%d')
+                print(f"为了指标预热，自动调整请求开始日期: {start_date} -> {fetch_start_date}")
+
+            # 将 start_date 注入到策略参数中，用于严格控制交易开始时间
+            # 这样策略在 fetch_start_date 开始运行计算指标，但在 start_date 之前不进行交易
+            strategy_params['start_date'] = start_date
+
+            df_raw = fetch_futures_data(symbol=symbol, period=period, start_date=fetch_start_date, end_date=end_date)
+            
+            # 检查数据是否被截断 (数据源起始时间晚于请求时间 2 天以上)
+            if start_date and df_raw is not None and not df_raw.empty:
+                req_start = pd.to_datetime(start_date)
+                data_start = df_raw.index.min()
+                if data_start > req_start + pd.Timedelta(days=5): # 放宽到5天
+                    data_warning = f"【数据警告】数据源限制: 只能获取到 {data_start.strftime('%Y-%m-%d')} 之后的数据 (请求开始: {start_date})。免费接口通常仅提供最近约1000根K线(分钟级)。"
+                    print(data_warning)
+                    
         except ValueError as ve:
             # 捕获数据加载中抛出的已知错误（如日期范围不匹配）
             return {"error": str(ve)}
         except Exception as e:
             return {"error": f"数据获取失败: {str(e)}"}
             
-        if df is None or df.empty:
+        if df_raw is None or df_raw.empty:
             return {"error": "未找到该品种的数据，请检查代码或日期范围"}
             
         # 转换 timeframe
@@ -108,10 +166,34 @@ class BacktestEngine:
         compression = 1 if period == 'daily' else int(period)
         
         # 检查数据列
-        if 'OpenInterest' not in df.columns and 'hold' in df.columns:
-             df.rename(columns={'hold': 'OpenInterest'}, inplace=True)
+        if 'OpenInterest' not in df_raw.columns and 'hold' in df_raw.columns:
+             df_raw.rename(columns={'hold': 'OpenInterest'}, inplace=True)
 
-        data = bt.feeds.PandasData(dataname=df, timeframe=timeframe, compression=compression)
+        # --- 预计算策略所需的 MA 数据 (支持 min_periods=1 以消除预热期) ---
+        fast_p = 20
+        slow_p = 55
+        
+        # 根据策略类型和参数确定周期
+        if 'fast_period' in strategy_params:
+            fast_p = int(strategy_params['fast_period'])
+        elif strategy_name == 'TrendFollowingStrategy':
+            fast_p = 10
+            
+        if 'slow_period' in strategy_params:
+            slow_p = int(strategy_params['slow_period'])
+        elif strategy_name == 'TrendFollowingStrategy':
+            slow_p = 30
+            
+        # 计算并添加到 DataFrame
+        if 'Close' in df_raw.columns:
+            df_raw['ma_fast'] = df_raw['Close'].rolling(window=fast_p, min_periods=1).mean()
+            df_raw['ma_slow'] = df_raw['Close'].rolling(window=slow_p, min_periods=1).mean()
+            # 确保没有 NaN
+            df_raw['ma_fast'] = df_raw['ma_fast'].bfill()
+            df_raw['ma_slow'] = df_raw['ma_slow'].bfill()
+
+        # 使用自定义 DataFeed
+        data = StrategyData(dataname=df_raw, timeframe=timeframe, compression=compression)
         cerebro.adddata(data)
         
         # 2. 添加策略
@@ -137,16 +219,21 @@ class BacktestEngine:
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
         # 5. 运行
-        results = cerebro.run()
+        results = cerebro.run(tradehistory=True)
         if not results:
             return {"error": "回测未产生结果"}
             
         strat = results[0]
         
+        # 如果有数据警告，插入到日志头部
+        if data_warning:
+            strat.logs.insert(0, data_warning)
+        
         # 6. 提取结果
         
         # 权益曲线
         timereturns = strat.analyzers.timereturn.get_analysis()
+        
         equity_curve = []
         cumulative = 1.0
         current_equity = initial_cash
@@ -178,20 +265,128 @@ class BacktestEngine:
         lost_trades = trade_analysis.get('lost', {}).get('total', 0)
         
         pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
-        
+
         # 准备 K 线数据
         # 确保索引是 datetime
-        df_kline = df.copy()
+        # 构建前端可视窗口数据（切片到用户请求的范围）
+        df_kline = df_raw.copy()
+        
+        # 重新构建 mask
+        range_mask = pd.Series(True, index=df_kline.index)
+        
+        start_dt_ts = pd.to_datetime(start_date) if start_date else None
+        end_dt_ts = (pd.to_datetime(end_date) + pd.Timedelta(days=1)) if end_date else None
+        
+        if start_dt_ts:
+            range_mask = range_mask & (df_kline.index >= start_dt_ts)
+        if end_dt_ts:
+            range_mask = range_mask & (df_kline.index < end_dt_ts)
+            
+        final_mask = range_mask
+        df_kline = df_kline[final_mask]
+
         if not isinstance(df_kline.index, pd.DatetimeIndex):
              # 尝试将索引转换为 datetime，或者使用 date 列
              if 'date' in df_kline.columns:
                  df_kline['date'] = pd.to_datetime(df_kline['date'])
                  df_kline.set_index('date', inplace=True)
         
+        # --- 结果过滤 (确保返回给前端的数据严格在 start_date ~ end_date 范围内) ---
+        # 虽然 LoggingStrategy 已做了部分 start_date 过滤，但为了保险及处理 equity_curve，再次统一过滤
+        
+        # 1. 过滤 Logs
+        final_logs = []
+        start_dt_ts = pd.to_datetime(start_date) if start_date else None
+        end_dt_ts = (pd.to_datetime(end_date) + pd.Timedelta(days=1)) if end_date else None
+        
+        # 记录过滤前的累计盈亏 (用于解释初始负收益)
+        pre_window_pnl = 0.0
+        has_pre_window_pnl = False
+        
+        # 尝试从 equity_curve 获取 start_date 之前的最后一条记录的盈亏
+        if start_dt_ts and equity_curve:
+            # equity_curve 是按时间排序的
+            last_pnl = 0.0
+            for eq in equity_curve:
+                try:
+                    eq_dt = pd.to_datetime(eq['date'])
+                    if eq_dt < start_dt_ts:
+                        last_pnl = eq['value'] - initial_cash
+                        has_pre_window_pnl = True
+                    else:
+                        break # 已进入窗口，停止搜索
+                except:
+                    continue
+            
+            if has_pre_window_pnl:
+                pre_window_pnl = last_pnl
+                # 插入一条提示日志
+                final_logs.append(f"{start_date}, --- 日志过滤窗口开始 (此前累计盈亏: {pre_window_pnl:.2f}) ---")
+
+        for log in strat.logs:
+            # 尝试提取日期
+            try:
+                # log 格式: "2025-10-01 09:30:00, ..."
+                parts = log.split(',', 1)
+                log_dt = pd.to_datetime(parts[0])
+                if start_dt_ts and log_dt < start_dt_ts:
+                    continue
+                if end_dt_ts and log_dt >= end_dt_ts:
+                    continue
+                final_logs.append(log)
+            except:
+                # 无法解析日期的（如警告信息），保留
+                final_logs.append(log)
+        
+        # 2. 过滤 Trades
+        final_trades = []
+        
+        # strat.trades 遍历逻辑已移至上方，此处只需过滤 history
+        
+        for trade in strat.trades_history:
+            try:
+                trade_dt_str = trade['date']
+                trade_dt = pd.to_datetime(trade_dt_str)
+                
+                if start_dt_ts and trade_dt < start_dt_ts:
+                    continue
+                if end_dt_ts and trade_dt >= end_dt_ts:
+                    continue
+                final_trades.append(trade)
+            except:
+                final_trades.append(trade)
+                
+        # 3. 过滤 Equity Curve
+        final_equity_curve = []
+        for eq in equity_curve:
+            try:
+                eq_dt = pd.to_datetime(eq['date'])
+                # equity curve 通常是日频或按 bar，如果是日频，end_date 当天应包含
+                # 注意 eq['date'] 是 "YYYY-MM-DD" 字符串
+                if start_dt_ts and eq_dt < start_dt_ts:
+                    continue
+                if end_dt_ts and eq_dt >= end_dt_ts:
+                    continue
+                final_equity_curve.append(eq)
+            except:
+                final_equity_curve.append(eq)
+
         kline_data = {
             "dates": df_kline.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
             "values": df_kline[['Open', 'Close', 'Low', 'High']].values.tolist(),
             "volumes": df_kline['Volume'].tolist() if 'Volume' in df_kline.columns else []
+        }
+        
+        close_series = df_kline['Close'].astype(float)
+        ma5 = close_series.rolling(window=5, min_periods=1).mean()
+        ma10 = close_series.rolling(window=10, min_periods=1).mean()
+        ma20 = close_series.rolling(window=20, min_periods=1).mean()
+        ma55 = close_series.rolling(window=55, min_periods=1).mean()
+        kline_data['ma'] = {
+            "ma5": ma5.round(2).tolist(),
+            "ma10": ma10.round(2).tolist(),
+            "ma20": ma20.round(2).tolist(),
+            "ma55": ma55.round(2).tolist()
         }
 
         # 计算 MACD (无论策略是否使用，都计算以便前端展示)
@@ -216,11 +411,39 @@ class BacktestEngine:
             print(f"MACD Calculation Error: {e}")
             kline_data['macd'] = None
 
+        # 计算 DKX (如果策略是 DKXStrategy)
+        if strategy_name == 'DKXStrategy':
+            try:
+                dkx_period = int(strategy_params.get('dkx_period', 20))
+                dkx_ma_period = int(strategy_params.get('dkx_ma_period', 10))
+                
+                # 1. 计算 MID
+                # MID = (3*CLOSE + LOW + OPEN + HIGH) / 6
+                mid = (3 * df_kline['Close'] + df_kline['Low'] + df_kline['Open'] + df_kline['High']) / 6.0
+                
+                # 2. 计算 DKX = SMA(MID, 20, 1) -> 近似为 EMA(MID, period=2*20-1)
+                # alpha = 1/N. Backtrader EMA alpha = 2/(P+1). 
+                # 通达信 SMA(N,1): Y = (1*X + (N-1)*Y')/N = 1/N * X + (N-1)/N * Y'
+                # alpha = 1/N.
+                # EMA with alpha=1/dkx_period
+                dkx_line = mid.ewm(alpha=1.0/dkx_period, adjust=False).mean()
+                
+                # 3. 计算 MADKX = MA(DKX, 10)
+                madkx_line = dkx_line.rolling(window=dkx_ma_period).mean()
+                
+                kline_data['dkx'] = {
+                    "dkx": dkx_line.fillna(0).tolist(),
+                    "madkx": madkx_line.fillna(0).tolist()
+                }
+            except Exception as e:
+                print(f"DKX Calculation Error: {e}")
+                kline_data['dkx'] = None
+
         return {
             "status": "success",
-            "equity_curve": equity_curve,
+            "equity_curve": final_equity_curve,
             "kline_data": kline_data,
-            "trades": strat.trades_history,
+            "trades": final_trades,
             "metrics": {
                 "initial_cash": initial_cash,
                 "final_value": cerebro.broker.getvalue(),
@@ -232,5 +455,5 @@ class BacktestEngine:
                 "won_trades": won_trades,
                 "lost_trades": lost_trades
             },
-            "logs": strat.logs
+            "logs": final_logs
         }
