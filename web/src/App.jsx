@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip } from 'antd';
+import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip, Table } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
@@ -37,10 +37,40 @@ const App = () => {
 
   const [strategyType, setStrategyType] = useState('MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
+  
+  // 缓存全量数据
+  const [futuresList, setFuturesList] = useState([]);
+  const [stockList, setStockList] = useState([]);
+
+  // 统一处理列表切换逻辑
+  const switchSymbols = (marketType, fList = futuresList, sList = stockList) => {
+      const list = marketType === 'stock' ? sList : fList;
+      setSymbols(list || []);
+      
+      // 如果列表不为空，默认选中第一个
+      if (list && list.length > 0) {
+          // 如果是期货，尝试找 SH0，否则取第一个
+          let defaultSymbol = list[0];
+          if (marketType === 'futures') {
+              defaultSymbol = list.find(s => s.code === 'SH0') || list[0];
+          }
+          
+          form.setFieldsValue({ 
+              symbol: defaultSymbol.code, 
+              contract_multiplier: defaultSymbol.multiplier
+          });
+          fetchQuote(defaultSymbol.code);
+      } else {
+          form.setFieldsValue({ symbol: undefined });
+          setQuoteInfo(null);
+      }
+  };
 
   const fetchQuote = (symbol) => {
       if (!symbol) return;
-      axios.get(`http://localhost:8000/api/quote/latest?symbol=${symbol}`)
+      const marketType = form.getFieldValue('market_type') || 'futures';
+      const dataSource = form.getFieldValue('data_source') || 'main';
+      axios.get(`http://localhost:8000/api/quote/latest?symbol=${symbol}&market_type=${marketType}&data_source=${dataSource}`)
         .then(res => {
             setQuoteInfo(res.data);
         })
@@ -51,26 +81,30 @@ const App = () => {
   };
 
   useEffect(() => {
-    // 获取品种列表
-    axios.get('http://localhost:8000/api/symbols')
-      .then(res => {
-        setSymbols(res.data.futures);
-        if (res.data.futures.length > 0) {
-            // 默认选中第二个（烧碱），因为之前测试过
-            const defaultSymbol = res.data.futures.find(s => s.code === 'SH0') || res.data.futures[0];
-            form.setFieldsValue({ 
-                symbol: defaultSymbol.code, 
-                contract_multiplier: defaultSymbol.multiplier,
-                date_range: [dayjs('2025-10-01'), dayjs('2025-12-01')],
-                period: 'daily' // 默认日线
-            });
-            fetchQuote(defaultSymbol.code);
-        }
-      })
-      .catch(err => {
-          console.error(err);
-          message.error('无法连接到后端服务');
-      });
+    // 初始加载：并发获取期货和股票列表
+    Promise.all([
+        axios.get('http://localhost:8000/api/symbols?market_type=futures'),
+        axios.get('http://localhost:8000/api/symbols?market_type=stock')
+    ]).then(([futuresRes, stockRes]) => {
+        const fList = futuresRes.data.futures || [];
+        const sList = stockRes.data.stocks || [];
+        
+        setFuturesList(fList);
+        setStockList(sList);
+        
+        // 默认显示期货列表并选中
+        switchSymbols('futures', fList, sList);
+    }).catch(err => {
+        console.error(err);
+        message.error('无法连接到后端服务获取品种数据');
+    });
+    
+    // 初始化表单默认值
+    form.setFieldsValue({
+        market_type: 'futures',
+        period: 'daily',
+        initial_cash: 1000000
+    });
 
     // 获取策略代码
     fetchStrategyCode();
@@ -184,7 +218,7 @@ const App = () => {
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy') {
+      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy') {
         params = {
             fast_period: 20,
             slow_period: 55,
@@ -229,13 +263,18 @@ const App = () => {
       const payload = {
         symbol: values.symbol,
         period: values.period,
+        market_type: values.market_type || 'futures',
+        data_source: values.data_source || 'main',
         strategy_params: params,
         initial_cash: parseFloat(values.initial_cash || 1000000),
         auto_optimize: autoOptimize,
-        start_date: values.date_range ? values.date_range[0].format('YYYY-MM-DD') : null,
-        end_date: values.date_range ? values.date_range[1].format('YYYY-MM-DD') : null,
         strategy_name: strategyType
       };
+
+      if (values.date_range && values.date_range.length === 2) {
+        payload.start_date = values.date_range[0].format('YYYY-MM-DD');
+        payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+      }
       
       const response = await axios.post('http://localhost:8000/api/backtest', payload);
       setResults(response.data);
@@ -308,9 +347,37 @@ const App = () => {
         const ma55Series = (maData.ma55 && maData.ma55.length === rawData.length) ? maData.ma55 : calculateMA(55, rawData);
         const showDKX = strategyType === 'DKXStrategy';
 
+        const equityCurve = results.equity_curve || [];
+        let equitySeries = [];
+        if (equityCurve.length > 0) {
+            const equityMap = {};
+            equityCurve.forEach(item => {
+                const fullKey = item.date;
+                const shortKey = typeof item.date === 'string' ? item.date.slice(0, 10) : item.date;
+                equityMap[fullKey] = item.value;
+                if (!Object.prototype.hasOwnProperty.call(equityMap, shortKey)) {
+                    equityMap[shortKey] = item.value;
+                }
+            });
+            let lastValue = equityCurve[0].value;
+            equitySeries = dates.map(d => {
+                const fullKey = d;
+                const shortKey = typeof d === 'string' ? d.slice(0, 10) : d;
+                if (Object.prototype.hasOwnProperty.call(equityMap, fullKey)) {
+                    lastValue = equityMap[fullKey];
+                } else if (Object.prototype.hasOwnProperty.call(equityMap, shortKey)) {
+                    lastValue = equityMap[shortKey];
+                }
+                return lastValue;
+            });
+        }
+
         const legendData = ['K线', 'MA5', 'MA10', 'MA20', 'MA55', 'DIF', 'DEA', 'MACD'];
         if (showDKX && dkxData.dkx.length > 0) {
             legendData.push('DKX', 'MADKX');
+        }
+        if (equitySeries.length > 0) {
+            legendData.push('资金曲线');
         }
 
         const seriesList = [
@@ -479,6 +546,20 @@ const App = () => {
             });
         }
 
+        if (equitySeries.length > 0) {
+            seriesList.push({
+                name: '资金曲线',
+                type: 'line',
+                xAxisIndex: 3,
+                yAxisIndex: 3,
+                data: equitySeries,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: '#1890ff' },
+                areaStyle: { opacity: 0.15 }
+            });
+        }
+
         return {
             title: { text: 'K线图 & 交易信号' },
             tooltip: {
@@ -500,19 +581,25 @@ const App = () => {
                 {
                     left: '3%',
                     right: '4%',
-                    top: '5%',
-                    height: '55%'
+                    top: '3%',
+                    height: '45%'
                 },
                 {
                     left: '3%',
                     right: '4%',
-                    top: '63%',
+                    top: '50%',
                     height: '10%'
                 },
                 {
                     left: '3%',
                     right: '4%',
-                    top: '76%',
+                    top: '62%',
+                    height: '13%'
+                },
+                {
+                    left: '3%',
+                    right: '4%',
+                    top: '77%',
                     height: '15%'
                 }
             ],
@@ -536,6 +623,12 @@ const App = () => {
                 {
                     type: 'category',
                     gridIndex: 2,
+                    data: dates,
+                    axisLabel: { show: false }
+                },
+                {
+                    type: 'category',
+                    gridIndex: 3,
                     data: dates,
                     axisLabel: { show: false }
                 }
@@ -562,18 +655,27 @@ const App = () => {
                     axisLine: { show: false },
                     axisTick: { show: false },
                     splitLine: { show: false }
+                },
+                {
+                    scale: true,
+                    gridIndex: 3,
+                    splitNumber: 2,
+                    axisLabel: { show: true },
+                    axisLine: { show: false },
+                    axisTick: { show: false },
+                    splitLine: { show: false }
                 }
             ],
             dataZoom: [
                 {
                     type: 'inside',
-                    xAxisIndex: [0, 1, 2],
+                    xAxisIndex: [0, 1, 2, 3],
                     start: 50,
                     end: 100
                 },
                 {
                     show: true,
-                    xAxisIndex: [0, 1, 2],
+                    xAxisIndex: [0, 1, 2, 3],
                     type: 'slider',
                     top: '94%',
                     start: 50,
@@ -633,8 +735,8 @@ const App = () => {
                   <Col span={6}>
                     <Card title="策略配置" bordered={false} style={{ height: '100%' }}>
                       <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{
+                        market_type: 'futures',
                         initial_cash: 1000000,
-                        date_range: [dayjs('2025-10-01'), dayjs('2025-12-01')],
                         period: 'daily',
                         fast_period: 10,
                         slow_period: 20,
@@ -647,24 +749,63 @@ const App = () => {
                         macd_slow: 26,
                         macd_signal: 9
                       }}>
+                        <Form.Item name="market_type" label="市场类型">
+                          <Select onChange={(val) => {
+                              // 切换市场类型时，清空交易品种并切换列表
+                              form.setFieldsValue({ symbol: undefined });
+                              // 如果切换到股票，重置数据源为main
+                              if (val === 'stock') {
+                                  form.setFieldsValue({ data_source: 'main' });
+                              }
+                              // 直接使用缓存切换，不再重新请求
+                              switchSymbols(val);
+                          }}>
+                            <Option value="futures">期货</Option>
+                            <Option value="stock">股票</Option>
+                          </Select>
+                        </Form.Item>
+
+                        <Form.Item 
+                          name="data_source" 
+                          label="数据源" 
+                          initialValue="main"
+                          tooltip="选择'主力连续'将使用主力合约拼接数据；选择'加权指数'将使用加权指数数据(如可用)"
+                          shouldUpdate={(prev, curr) => prev.market_type !== curr.market_type}
+                        >
+                          <Select disabled={form.getFieldValue('market_type') === 'stock'}>
+                            <Option value="main">主力连续</Option>
+                            <Option value="weighted">加权指数</Option>
+                          </Select>
+                        </Form.Item>
+
+
                         <Form.Item name="initial_cash" label="初始资金">
                           <Input type="number" step="10000" />
                         </Form.Item>
 
-                        <Form.Item name="symbol" label="交易品种" rules={[{ required: true }]}>
-                          <Select 
-                            onChange={onSymbolChange}
-                            showSearch
-                            placeholder="选择或搜索品种"
-                            optionFilterProp="children"
-                            filterOption={(input, option) =>
-                              option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
-                            }
-                          >
-                            {symbols.map(s => (
-                              <Option key={s.code} value={s.code}>{s.name}</Option>
-                            ))}
-                          </Select>
+                        <Form.Item noStyle shouldUpdate={(prev, curr) => prev.market_type !== curr.market_type}>
+                            {({ getFieldValue }) => {
+                                const marketType = getFieldValue('market_type') || 'futures';
+                                return (
+                                    <Form.Item name="symbol" label="交易品种" rules={[{ required: true }]}>
+                                          <Select 
+                                            onChange={onSymbolChange}
+                                            showSearch
+                                            placeholder="选择或搜索品种"
+                                            optionFilterProp="children"
+                                            filterOption={(input, option) =>
+                                              option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
+                                            }
+                                            // 针对股票大量数据，优化渲染（如果数据量很大，可能需要虚拟滚动，这里暂且直接展示）
+                                            // Antd 4+ 的 Select 已经内置了虚拟滚动，通常可以处理几千条数据
+                                          >
+                                            {symbols.map(s => (
+                                              <Option key={s.code} value={s.code}>{s.name}</Option>
+                                            ))}
+                                          </Select>
+                                    </Form.Item>
+                                );
+                            }}
                         </Form.Item>
 
                         <Form.Item noStyle shouldUpdate={(prev, current) => prev.initial_cash !== current.initial_cash || prev.contract_multiplier !== current.contract_multiplier || prev.symbol !== current.symbol}>
@@ -722,7 +863,7 @@ const App = () => {
                                         initialValues.macd_fast = 12;
                                         initialValues.macd_slow = 26;
                                         initialValues.macd_signal = 9;
-                                    } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy') {
+                                } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy') {
                                         initialValues.fast_period = 20;
                                         initialValues.slow_period = 55;
                                         if (val === 'MA20MA55PartialTakeProfitStrategy') {
@@ -753,7 +894,8 @@ const App = () => {
                             }}>
                                 <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                                 <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
-                                <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉</Option>
+                                <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                                <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
                                 <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
                                 <Option value="DKXStrategy">DKX多空线策略</Option>
                                 <Option value="TrendFollowingStrategy">双均线趋势跟踪</Option>
@@ -774,7 +916,7 @@ const App = () => {
                            <DatePicker.RangePicker style={{ width: '100%' }} />
                         </Form.Item>
 
-                        {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' ? (
+                        {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' ? (
                             <>
                                 <Row gutter={16}>
                                     <Col span={12}>
@@ -854,7 +996,7 @@ const App = () => {
                             }}
                         </Form.Item>
 
-                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' ? (
+                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' ? (
                             <>
                                 <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                                     <Radio.Group>
@@ -956,7 +1098,7 @@ const App = () => {
                                             value={item.value} 
                                             valueStyle={{ 
                                                 color: item.metric === '净利润' 
-                                                    ? (parseFloat(item.value) > 0 ? '#3f8600' : '#cf1322') 
+                                                    ? (parseFloat(item.value) > 0 ? '#cf1322' : '#3f8600') 
                                                     : undefined 
                                             }}
                                         />
@@ -1025,21 +1167,84 @@ const App = () => {
                 <Card 
                     title="详细交易日志" 
                     style={{ height: 'calc(100vh - 120px)' }}
-                    bodyStyle={{ height: 'calc(100% - 60px)', overflowY: 'auto', fontFamily: 'monospace', padding: '12px' }}
+                    bodyStyle={{ height: 'calc(100% - 60px)', padding: '0' }}
                 >
-                    {results && results.logs ? results.logs.map((log, index) => {
-                         const isProfitLog = log.includes('交易利润');
-                         return (
-                            <div key={index} style={{ 
-                                borderBottom: '1px solid #eee', 
-                                padding: '4px 0',
-                                color: isProfitLog ? 'red' : 'inherit',
-                                fontWeight: isProfitLog ? 'bold' : 'normal'
-                            }}>
-                                {log}
-                            </div>
-                         );
-                    }) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据，请先运行回测</div>}
+                    {results && results.logs ? (
+                        <Table 
+                            dataSource={results.logs.map((log, index) => {
+                                const firstComma = log.indexOf(',');
+                                const date = firstComma !== -1 ? log.substring(0, firstComma).trim() : '';
+                                const content = firstComma !== -1 ? log.substring(firstComma + 1).trim() : log;
+                                
+                                let type = 'info';
+                                if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
+                                else if (content.includes('卖出') || content.includes('开空') || content.includes('做空') || content.includes('平仓')) type = 'sell';
+                                else if (content.includes('交易利润')) type = 'profit';
+                                else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
+                                else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
+
+                                let pnl = null;
+                                if (type === 'profit') {
+                                    const match = content.match(/净利\s*([-\d.]+)/);
+                                    if (match) pnl = parseFloat(match[1]);
+                                }
+
+                                return { key: index, date, content, type, pnl };
+                            })}
+                            columns={[
+                                { 
+                                    title: '时间', 
+                                    dataIndex: 'date', 
+                                    width: 180,
+                                    sorter: (a, b) => new Date(a.date) - new Date(b.date),
+                                    defaultSortOrder: 'ascend'
+                                },
+                                { 
+                                    title: '类型', 
+                                    dataIndex: 'type', 
+                                    width: 100,
+                                    filters: [
+                                        { text: '买入', value: 'buy' },
+                                        { text: '卖出', value: 'sell' },
+                                        { text: '结算', value: 'profit' },
+                                        { text: '信号', value: 'signal' },
+                                        { text: '系统', value: 'system' },
+                                        { text: '信息', value: 'info' }
+                                    ],
+                                    onFilter: (value, record) => record.type === value,
+                                    render: (type) => {
+                                        const config = {
+                                            'buy': { color: '#f50', text: '买入' },
+                                            'sell': { color: '#87d068', text: '卖出' },
+                                            'profit': { color: 'gold', text: '结算' },
+                                            'signal': { color: 'blue', text: '信号' },
+                                            'system': { color: 'default', text: '系统' },
+                                            'info': { color: 'default', text: '信息' }
+                                        };
+                                        const c = config[type] || config['info'];
+                                        return <Tag color={c.color}>{c.text}</Tag>;
+                                    }
+                                },
+                                { 
+                                    title: '内容', 
+                                    dataIndex: 'content',
+                                    render: (text) => <span style={{ fontFamily: 'monospace' }}>{text}</span>
+                                },
+                                { 
+                                    title: '净利', 
+                                    dataIndex: 'pnl', 
+                                    width: 120,
+                                    sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
+                                    render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toFixed(2)}</span> : '-' 
+                                }
+                            ]}
+                            pagination={{ pageSize: 50, showSizeChanger: true }}
+                            scroll={{ y: 'calc(100vh - 250px)' }}
+                            size="small"
+                            rowKey="key"
+                            bordered
+                        />
+                    ) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据，请先运行回测</div>}
                 </Card>
             </TabPane>
         </Tabs>

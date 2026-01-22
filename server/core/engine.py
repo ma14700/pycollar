@@ -2,7 +2,7 @@ import backtrader as bt
 import pandas as pd
 import datetime
 import importlib
-from .data_loader import fetch_futures_data
+from .data_loader import fetch_data
 from . import strategy
 
 class StrategyData(bt.feeds.PandasData):
@@ -13,7 +13,7 @@ class StrategyData(bt.feeds.PandasData):
     )
 
 class BacktestEngine:
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main'):
         print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
         importlib.reload(strategy)
@@ -31,6 +31,7 @@ class BacktestEngine:
 
         # 继承策略以捕获日志 (动态继承)
         class LoggingStrategy(StrategyClass):
+
             def __init__(self):
                 super(LoggingStrategy, self).__init__()
                 self.logs = []
@@ -77,11 +78,7 @@ class BacktestEngine:
                     
                 if order.status in [order.Completed]:
                     dt_dt = self.datas[0].datetime.datetime(0)
-                    # 过滤窗口外订单事件 - 暂时移除，改为后期统一过滤，以便保留跨窗口交易的开仓记录
-                    # if self.exec_start_dt and dt_dt.date() < self.exec_start_dt:
-                    #    # 仍调用父类以维持引擎状态，但不记录交易历史
-                    #    super().notify_order(order)
-                    #    return
+                    
                     dt = dt_dt.strftime('%Y-%m-%d %H:%M:%S')
                     
                     size = order.executed.size
@@ -142,7 +139,7 @@ class BacktestEngine:
             # 这样策略在 fetch_start_date 开始运行计算指标，但在 start_date 之前不进行交易
             strategy_params['start_date'] = start_date
 
-            df_raw = fetch_futures_data(symbol=symbol, period=period, start_date=fetch_start_date, end_date=end_date)
+            df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source)
             
             # 检查数据是否被截断 (数据源起始时间晚于请求时间 2 天以上)
             if start_date and df_raw is not None and not df_raw.empty:
@@ -213,7 +210,12 @@ class BacktestEngine:
         cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=strategy_params.get('contract_multiplier', 1))
         
         # 4. 添加分析器
-        cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+        cerebro.addanalyzer(
+            bt.analyzers.TimeReturn,
+            _name='timereturn',
+            timeframe=timeframe,
+            compression=compression
+        )
         cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days, compression=1, riskfreerate=0.0)
         cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
@@ -241,11 +243,12 @@ class BacktestEngine:
         # TimeReturn 返回的是收益率，我们需要计算净值
         # Backtrader 的 TimeReturn key 是 datetime 对象
         for date, ret in timereturns.items():
-            if ret is None: ret = 0.0
+            if ret is None:
+                ret = 0.0
             cumulative *= (1.0 + ret)
             current_equity = initial_cash * cumulative
             equity_curve.append({
-                "date": date.strftime("%Y-%m-%d"),
+                "date": date.strftime("%Y-%m-%d %H:%M:%S"),
                 "value": current_equity,
                 "return": ret
             })
@@ -411,29 +414,34 @@ class BacktestEngine:
             print(f"MACD Calculation Error: {e}")
             kline_data['macd'] = None
 
-        # 计算 DKX (如果策略是 DKXStrategy)
         if strategy_name == 'DKXStrategy':
             try:
                 dkx_period = int(strategy_params.get('dkx_period', 20))
                 dkx_ma_period = int(strategy_params.get('dkx_ma_period', 10))
                 
-                # 1. 计算 MID
-                # MID = (3*CLOSE + LOW + OPEN + HIGH) / 6
                 mid = (3 * df_kline['Close'] + df_kline['Low'] + df_kline['Open'] + df_kline['High']) / 6.0
-                
-                # 2. 计算 DKX = SMA(MID, 20, 1) -> 近似为 EMA(MID, period=2*20-1)
-                # alpha = 1/N. Backtrader EMA alpha = 2/(P+1). 
-                # 通达信 SMA(N,1): Y = (1*X + (N-1)*Y')/N = 1/N * X + (N-1)/N * Y'
-                # alpha = 1/N.
-                # EMA with alpha=1/dkx_period
-                dkx_line = mid.ewm(alpha=1.0/dkx_period, adjust=False).mean()
-                
-                # 3. 计算 MADKX = MA(DKX, 10)
-                madkx_line = dkx_line.rolling(window=dkx_ma_period).mean()
-                
+                dkx_values = []
+                madkx_values = []
+                dkx_prev = None
+                madkx_prev = None
+                for v in mid.values:
+                    if dkx_prev is None:
+                        dkx_cur = v
+                    else:
+                        dkx_cur = (v + (dkx_period - 1) * dkx_prev) / dkx_period
+                    dkx_prev = dkx_cur
+                    if madkx_prev is None:
+                        madkx_cur = dkx_cur
+                    else:
+                        madkx_cur = (dkx_cur + (dkx_ma_period - 1) * madkx_prev) / dkx_ma_period
+                    madkx_prev = madkx_cur
+                    dkx_values.append(dkx_cur)
+                    madkx_values.append(madkx_cur)
+                dkx_line = pd.Series(dkx_values, index=mid.index)
+                madkx_line = pd.Series(madkx_values, index=mid.index)
                 kline_data['dkx'] = {
-                    "dkx": dkx_line.fillna(0).tolist(),
-                    "madkx": madkx_line.fillna(0).tolist()
+                    "dkx": dkx_line.tolist(),
+                    "madkx": madkx_line.tolist()
                 }
             except Exception as e:
                 print(f"DKX Calculation Error: {e}")

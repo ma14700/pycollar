@@ -1,4 +1,5 @@
 import backtrader as bt
+import pandas as pd
 import datetime
 import pandas as pd
 
@@ -22,6 +23,7 @@ class TrendFollowingStrategy(bt.Strategy):
         ('fixed_size', 20),       # 固定手数
         ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
         ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
+        ('start_date', None),    # 策略启动日期 (YYYY-MM-DD)，在此之前不交易
     )
 
     def log(self, txt, dt=None):
@@ -154,10 +156,19 @@ class TrendFollowingStrategy(bt.Strategy):
 
     def next(self):
         # 0. 严格的时间窗口控制
-        if self.start_date:
+        if self.params.start_date:
             current_date = self.datas[0].datetime.date(0)
-            if current_date < self.start_date:
-                return
+            # 处理字符串类型的 start_date
+            if isinstance(self.params.start_date, str):
+                try:
+                    start_dt = pd.to_datetime(self.params.start_date).date()
+                    if current_date < start_dt:
+                        return
+                except:
+                    pass
+            elif isinstance(self.params.start_date, datetime.date):
+                 if current_date < self.params.start_date:
+                     return
 
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
@@ -300,6 +311,7 @@ class MA55BreakoutStrategy(bt.Strategy):
         ('contract_multiplier', 1), # 合约乘数
         ('use_trailing_stop', False), # 是否使用移动止损 (默认为False，主要依靠背离)
         ('print_log', True),     # 打印日志
+        ('start_date', None),    # 策略启动日期
     )
 
     def log(self, txt, dt=None):
@@ -417,10 +429,19 @@ class MA55BreakoutStrategy(bt.Strategy):
 
     def next(self):
         # 0. 严格的时间窗口控制
-        if self.start_date:
+        if self.params.start_date:
             current_date = self.datas[0].datetime.date(0)
-            if current_date < self.start_date:
-                return
+            # 处理字符串类型的 start_date
+            if isinstance(self.params.start_date, str):
+                try:
+                    start_dt = pd.to_datetime(self.params.start_date).date()
+                    if current_date < start_dt:
+                        return
+                except:
+                    pass
+            elif isinstance(self.params.start_date, datetime.date):
+                 if current_date < self.params.start_date:
+                     return
 
         # 强制在回测结束前平仓
         if len(self) >= self.datas[0].buflen() - 2:
@@ -1091,6 +1112,31 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
         return size
 
 
+class StockMA20MA55LongOnlyStrategy(MA20MA55CrossoverStrategy):
+    def next(self):
+        if self.start_date:
+            current_date = self.datas[0].datetime.date(0)
+            if current_date < self.start_date:
+                return
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+        if self.order:
+            return
+        value = self.broker.get_value()
+        if self.crossover > 0:
+            self.log(f'金叉信号 (MA20 > MA55): {self.ma_fast[0]:.2f} > {self.ma_slow[0]:.2f}')
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做多/加仓: 目标持仓 {size}')
+                self.order = self.order_target_size(target=size)
+        elif self.crossover < 0:
+            if self.position.size > 0:
+                self.log(f'死叉信号(仅平多不做空): {self.ma_fast[0]:.2f} < {self.ma_slow[0]:.2f}，平掉多单')
+                self.order = self.close()
+
 class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     """
     20/55 双均线交叉策略 + 盈利平半仓
@@ -1209,13 +1255,15 @@ class DKX_Indicator(bt.Indicator):
     params = (('period', 20), ('ma_period', 10),)
     
     def __init__(self):
-        # 使用递归实现的 DKX (无预热延迟)
-        self.lines.dkx = DKX(self.data, period=self.params.period)
-        
-        # MADKX = SimpleMovingAverage(DKX, 10)
-        self.lines.madkx = bt.indicators.SimpleMovingAverage(
-            self.lines.dkx, period=self.params.ma_period
-        )
+        self.dkx_base = DKX(self.data, period=self.params.period)
+
+    def next(self):
+        self.lines.dkx[0] = self.dkx_base.dkx[0]
+        if len(self) == 1:
+            self.lines.madkx[0] = self.lines.dkx[0]
+        else:
+            n = self.params.ma_period
+            self.lines.madkx[0] = (self.lines.dkx[0] + (n - 1) * self.lines.madkx[-1]) / n
 
 
 class DKXStrategy(MA20MA55CrossoverStrategy):

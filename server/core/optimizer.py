@@ -6,7 +6,7 @@ class StrategyOptimizer:
     def __init__(self):
         self.engine = BacktestEngine()
         
-    def optimize(self, symbol, period, initial_params, target_return=20.0, max_trials=10, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy'):
+    def optimize(self, symbol, period, initial_params, target_return=20.0, max_trials=10, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', data_source='main'):
         """
         简单的随机搜索优化器
         :param symbol: 交易品种
@@ -79,7 +79,7 @@ class StrategyOptimizer:
             print(f"优化尝试 #{i+1}: {trial_params}")
             
             # 运行回测
-            result = self.engine.run(symbol, period, trial_params, start_date=start_date, end_date=end_date, strategy_name=strategy_name)
+            result = self.engine.run(symbol, period, trial_params, start_date=start_date, end_date=end_date, strategy_name=strategy_name, data_source=data_source)
             
             if "error" in result:
                 continue
