@@ -1,5 +1,6 @@
 import backtrader as bt
 import pandas as pd
+import numpy as np
 import datetime
 import importlib
 from .data_loader import fetch_data
@@ -37,6 +38,20 @@ class BacktestEngine:
                 self.logs = []
                 self.trades_history = []
                 self.exec_start_dt = None  # 执行窗口起始日期 (仅记录窗口内的日志与交易)
+                # 最大回撤点位记录 (Price, Date)
+                self.current_mdd_price = None
+                self.current_mdd_date = None
+                self.entry_price = None # 当前持仓的平均开仓价 (用于计算回撤幅度)
+                
+                # 新增统计指标
+                self.max_capital_usage = 0.0
+                self.max_profit_points = 0.0
+                self.max_loss_points = 0.0
+                self.max_profit_per_hand_val = 0.0 # 用于计算一手盈利百分数 (基于最大盈利的那笔交易)
+                
+                # 辅助记录最大最小PNL
+                self.max_trade_pnl = -float('inf')
+                self.min_trade_pnl = float('inf')
 
             def start(self):
                 # 确保列表已初始化（防止某些情况下 __init__ 属性丢失）
@@ -44,6 +59,19 @@ class BacktestEngine:
                     self.logs = []
                 if not hasattr(self, 'trades_history'):
                     self.trades_history = []
+                # 重置回撤记录
+                self.current_mdd_price = None
+                self.current_mdd_date = None
+                self.entry_price = None
+                
+                self.max_capital_usage = 0.0
+                self.max_profit_points = 0.0
+                self.max_loss_points = 0.0
+                self.max_profit_per_hand_val = 0.0
+                
+                self.max_trade_pnl = -float('inf')
+                self.min_trade_pnl = float('inf')
+                
                 # 设置执行起始窗口 (以便过滤预热期事件)
                 try:
                     if start_date:
@@ -53,6 +81,61 @@ class BacktestEngine:
                 # 调用父类的 start (如果有)
                 if hasattr(super(), 'start'):
                     super().start()
+
+            def notify_trade(self, trade):
+                if trade.isclosed:
+                    # 计算点数
+                    multiplier = getattr(self.p, 'contract_multiplier', 1)
+                    margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                    size = abs(trade.size)
+                    pnl = trade.pnlcomm
+                    
+                    if size > 0 and multiplier > 0:
+                        points = pnl / (size * multiplier)
+                        
+                        # 记录最大盈利交易的点数和每手盈利金额
+                        if pnl > self.max_trade_pnl:
+                            self.max_trade_pnl = pnl
+                            self.max_profit_points = points
+                            
+                            # 记录该笔交易的每手盈利金额 (Total PnL / Size)
+                            # 用于后续计算: 一手盈利百分数 = 每手盈利金额 / 最新参考价
+                            self.max_profit_per_hand_val = pnl / size
+                        
+                        # 记录最亏交易的点数
+                        if pnl < self.min_trade_pnl:
+                            self.min_trade_pnl = pnl
+                            self.max_loss_points = points
+                
+                super().notify_trade(trade)
+
+            def next(self):
+                # 记录最大资金使用率
+                val = self.broker.getvalue()
+                cash = self.broker.getcash()
+                if val > 0:
+                    usage = (val - cash) / val
+                    self.max_capital_usage = max(self.max_capital_usage, usage)
+
+                # 记录最大回撤点位 (在 super().next() 之前或之后均可，这里选择之前以捕获当前bar)
+                # 注意：Backtrader 的 next 在 bar 关闭时调用，所以 datas[0] 是当前结束的 bar
+                if self.position.size > 0:
+                    # 多头持仓：关注最低价
+                    low = self.datas[0].low[0]
+                    dt = self.datas[0].datetime.datetime(0)
+                    if self.current_mdd_price is None or low < self.current_mdd_price:
+                        self.current_mdd_price = low
+                        self.current_mdd_date = dt.strftime('%Y-%m-%d %H:%M:%S')
+                elif self.position.size < 0:
+                    # 空头持仓：关注最高价
+                    high = self.datas[0].high[0]
+                    dt = self.datas[0].datetime.datetime(0)
+                    if self.current_mdd_price is None or high > self.current_mdd_price:
+                        self.current_mdd_price = high
+                        self.current_mdd_date = dt.strftime('%Y-%m-%d %H:%M:%S')
+                
+                # 调用父类策略逻辑
+                super().next()
 
             def log(self, txt, dt=None):
                 if not hasattr(self, 'logs'):
@@ -87,30 +170,118 @@ class BacktestEngine:
                     current_pos = self.position.size
                     prev_pos = current_pos - size
                     
+                    # 确保数值比较的稳定性
+                    if abs(prev_pos) < 1e-9: prev_pos = 0
+                    if abs(current_pos) < 1e-9: current_pos = 0
+                    
+                    # 维护 entry_price 逻辑
+                    recorded_entry_price = self.entry_price # 默认使用当前记录的成本价
+                    
+                    # 调试日志
+                    # print(f"DEBUG: Order Executed. Date={dt}, Size={size}, Price={price}, PrevPos={prev_pos}, CurrPos={current_pos}, OldEntry={self.entry_price}")
+
+                    # 1. 开仓 (0 -> 非0)
+                    if prev_pos == 0 and current_pos != 0:
+                        self.entry_price = price
+                        recorded_entry_price = None # 开仓本身没有历史持仓
+                    
+                    # 2. 反手 (正 -> 负 或 负 -> 正)
+                    elif (prev_pos > 0 and current_pos < 0) or (prev_pos < 0 and current_pos > 0):
+                        # recorded_entry_price 保持为反手前的持仓成本，用于记录
+                        self.entry_price = price # 更新为新方向的成本
+                        
+                    # 3. 平仓 (非0 -> 0)
+                    elif prev_pos != 0 and current_pos == 0:
+                        # recorded_entry_price 保持为平仓前的持仓成本，用于记录
+                        self.entry_price = None
+                        
+                    # 4. 加仓 (绝对值增加)
+                    elif abs(current_pos) > abs(prev_pos):
+                        # 计算加权平均成本
+                        if self.entry_price is not None:
+                            old_value = prev_pos * self.entry_price
+                            new_part_value = size * price
+                            # 注意: prev_pos 和 size 同号，current_pos = prev_pos + size
+                            self.entry_price = (old_value + new_part_value) / current_pos
+                        else:
+                            self.entry_price = price # 理论上不应发生，作为防御
+                        recorded_entry_price = None # 加仓不产生平仓记录的回撤点
+                        
+                    # 5. 减仓 (绝对值减少，但未归零)
+                    elif abs(current_pos) < abs(prev_pos):
+                        # 成本价不变
+                        pass
+
                     action_type = "未知"
+                    holding_direction = "无" # 该笔交易对应的前一段持仓方向 (用于前端显示回撤方向)
+                    
                     if size > 0: # 买入
                         if prev_pos >= 0:
                             action_type = "买多" # 开多 or 加多
+                            if prev_pos > 0: holding_direction = "做多" # 加仓
                         elif prev_pos < 0 and current_pos > 0:
                             action_type = "反手做多" # 之前是空仓，现在是多仓
+                            holding_direction = "做空" # 之前是做空
                         else: # prev_pos < 0 and current_pos <= 0
                             action_type = "平空" # 买入平空
+                            holding_direction = "做空" # 之前是做空
                     else: # 卖出 (size < 0)
                         if prev_pos <= 0:
                             action_type = "卖空" # 开空 or 加空
+                            if prev_pos < 0: holding_direction = "做空" # 加仓
                         elif prev_pos > 0 and current_pos < 0:
                             action_type = "反手做空" # 之前是多仓，现在是空仓
+                            holding_direction = "做多" # 之前是做多
                         else: # prev_pos > 0 and current_pos >= 0
                             action_type = "平多" # 卖出平多
+                            holding_direction = "做多" # 之前是做多
                             
+                    # 确保 float 类型，防止 numpy 类型导致 json 序列化问题
+                    def safe_float(val):
+                        if val is None: return None
+                        try:
+                            f = float(val)
+                            import math
+                            if math.isnan(f) or math.isinf(f): return None
+                            return f
+                        except:
+                            return None
+
+                    final_mdd_price = safe_float(self.current_mdd_price)
+                    final_entry_price = safe_float(recorded_entry_price)
+                    
+                    # 只有平仓或反手时，才记录 MDD
+                    # 开仓和加仓不记录 MDD (因为还没有"持仓过程"结束)
+                    if recorded_entry_price is None:
+                        final_mdd_price = None
+                        
                     self.trades_history.append({
                         "date": dt,
                         "type": "buy" if order.isbuy() else "sell",
                         "action": action_type,
-                        "price": price,
-                        "size": size,
-                        "position": current_pos  # 添加当前持仓量
+                        "price": float(price),
+                        "size": float(size),
+                        "position": float(current_pos),  # 添加当前持仓量
+                        "mdd_price": final_mdd_price, # 当前持仓期间的最大回撤价格
+                        "mdd_date": self.current_mdd_date if final_mdd_price is not None else None,    # 最大回撤发生的日期
+                        "entry_price": final_entry_price, # 对应的开仓均价
+                        "holding_direction": holding_direction # 对应的持仓方向
                     })
+                    
+                    # 状态重置逻辑
+                    if current_pos == 0:
+                        # 平仓后，重置回撤记录
+                        self.current_mdd_price = None
+                        self.current_mdd_date = None
+                    elif (prev_pos > 0 and current_pos < 0) or (prev_pos < 0 and current_pos > 0):
+                        # 反手操作：之前的记录归属于上一笔交易，现在开始新交易，重置
+                        self.current_mdd_price = None
+                        self.current_mdd_date = None
+                    # 注意：如果 prev_pos == 0 (新开仓)，self.current_mdd_price 应该在 next() 中被初始化/更新。
+                    # 由于 notify_order 在 next 之前或之中触发，如果这是开仓单，
+                    # 此时 recorded mdd 可能是 None (正确) 或者上一笔残留 (如果不幸没清除)。
+                    # 上面的逻辑保证了平仓或反手时清除。
+                    # 如果是单纯开仓 (0 -> size)，mdd 为 None，这是合理的，因为刚开仓还没有"过程"。
                 
                 super().notify_order(order)
 
@@ -269,6 +440,38 @@ class BacktestEngine:
         
         pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
 
+        # 新增指标提取
+        max_capital_usage = getattr(strat, 'max_capital_usage', 0.0)
+        max_profit_points = getattr(strat, 'max_profit_points', 0.0)
+        max_loss_points = getattr(strat, 'max_loss_points', 0.0)
+        max_profit_per_hand_val = getattr(strat, 'max_profit_per_hand_val', 0.0)
+        
+        # 使用手数
+        used_size = '动态'
+        fixed_size = 1
+        size_mode = strategy_params.get('size_mode')
+        if size_mode == 'fixed' or not size_mode: # Default to fixed if not present
+            try:
+                fixed_size = int(strategy_params.get('fixed_size', 20)) # Default 20
+                used_size = fixed_size
+            except:
+                used_size = '未知'
+        
+        # 一手最终赚钱数 (每手净利润)
+        one_hand_net_profit = 0.0
+        if isinstance(used_size, (int, float)) and used_size > 0:
+            one_hand_net_profit = pnl_net / used_size
+            
+        # 一手盈利百分数 (每手盈利金额 / 最新参考价 * 100)
+        # 获取最新参考价 (使用 df_raw 中的 Close)
+        latest_price = 1.0
+        if df_raw is not None and not df_raw.empty:
+            latest_price = df_raw['Close'].iloc[-1]
+            
+        one_hand_profit_pct = 0.0
+        if latest_price > 0:
+            one_hand_profit_pct = (one_hand_net_profit / latest_price) * 100.0
+
         # 准备 K 线数据
         # 确保索引是 datetime
         # 构建前端可视窗口数据（切片到用户请求的范围）
@@ -425,6 +628,11 @@ class BacktestEngine:
                 dkx_prev = None
                 madkx_prev = None
                 for v in mid.values:
+                    if pd.isna(v):
+                        dkx_values.append(None)
+                        madkx_values.append(None)
+                        continue
+
                     if dkx_prev is None:
                         dkx_cur = v
                     else:
@@ -437,17 +645,34 @@ class BacktestEngine:
                     madkx_prev = madkx_cur
                     dkx_values.append(dkx_cur)
                     madkx_values.append(madkx_cur)
-                dkx_line = pd.Series(dkx_values, index=mid.index)
-                madkx_line = pd.Series(madkx_values, index=mid.index)
+                
                 kline_data['dkx'] = {
-                    "dkx": dkx_line.tolist(),
-                    "madkx": madkx_line.tolist()
+                    "dkx": dkx_values,
+                    "madkx": madkx_values
                 }
             except Exception as e:
                 print(f"DKX Calculation Error: {e}")
                 kline_data['dkx'] = None
 
-        return {
+        # 辅助函数：清理 NaN 和 Inf
+        def clean_data(obj):
+            if isinstance(obj, float):
+                if pd.isna(obj) or np.isinf(obj):
+                    return None
+                return obj
+            elif isinstance(obj, dict):
+                return {k: clean_data(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [clean_data(v) for v in obj]
+            elif isinstance(obj, (np.int64, np.int32)):
+                return int(obj)
+            elif isinstance(obj, (np.float64, np.float32)):
+                if pd.isna(obj) or np.isinf(obj):
+                    return None
+                return float(obj)
+            return obj
+
+        raw_result = {
             "status": "success",
             "equity_curve": final_equity_curve,
             "kline_data": kline_data,
@@ -461,7 +686,15 @@ class BacktestEngine:
                 "total_trades": total_trades,
                 "win_rate": (won_trades / total_trades * 100) if total_trades > 0 else 0,
                 "won_trades": won_trades,
-                "lost_trades": lost_trades
+                "lost_trades": lost_trades,
+                "used_size": used_size,
+                "max_capital_usage": max_capital_usage * 100,
+                "one_hand_net_profit": one_hand_net_profit,
+                "max_profit_points": max_profit_points,
+                "max_loss_points": max_loss_points,
+                "one_hand_profit_pct": one_hand_profit_pct
             },
             "logs": final_logs
         }
+        
+        return clean_data(raw_result)

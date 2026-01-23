@@ -83,14 +83,46 @@ async def get_latest_quote(symbol: str, market_type: str = 'futures', data_sourc
         else:
             fetch_symbol = symbol
             if data_source == 'weighted':
+                # 尝试将主力合约代码转换为加权代码
+                # 用户反馈：加权一般是888 (如 SH888)
                 if symbol.endswith('0'):
-                    fetch_symbol = symbol.replace('0', '13')
+                    fetch_symbol = symbol.replace('0', '888')
+                elif symbol.endswith('888'):
+                    fetch_symbol = symbol
                 else:
-                    fetch_symbol = symbol + '13'
-            df = ak.futures_zh_daily_sina(symbol=fetch_symbol)
-            if (df is None or df.empty) and data_source == 'weighted':
-                fetch_symbol = symbol
+                    fetch_symbol = symbol + '888'
+            
+            # 尝试获取数据
+            try:
                 df = ak.futures_zh_daily_sina(symbol=fetch_symbol)
+            except Exception:
+                df = None
+
+            # 如果首选代码失败，尝试 fallback (仅在 weighted 模式下)
+            if (df is None or df.empty) and data_source == 'weighted':
+                print(f"Quote: {fetch_symbol} failed, trying alternatives...")
+                alternatives = []
+                base_symbol = symbol.rstrip('0') if symbol.endswith('0') else symbol.replace('888', '')
+                alternatives.append(f"{base_symbol}13")
+                alternatives.append(f"{base_symbol}Index")
+                alternatives.append(f"{base_symbol}88")
+                
+                for alt in alternatives:
+                    try:
+                         df = ak.futures_zh_daily_sina(symbol=alt)
+                         if df is not None and not df.empty:
+                             print(f"Quote: Found alternative {alt}")
+                             fetch_symbol = alt
+                             break
+                    except:
+                        pass
+                
+                # 如果还是没找到，回退到主力
+                if df is None or df.empty:
+                     print(f"Quote: Fallback to main contract {symbol}")
+                     fetch_symbol = symbol if not symbol.endswith('888') else symbol.replace('888', '0')
+                     df = ak.futures_zh_daily_sina(symbol=fetch_symbol)
+
             if df is None or df.empty:
                 raise HTTPException(status_code=404, detail="Symbol not found")
             latest = df.iloc[-1]
@@ -243,8 +275,10 @@ CACHED_STOCKS = []
 LAST_STOCK_CACHE_TIME = None
 
 @app.get("/api/symbols")
-async def get_symbols(market_type: str = 'futures'):
+def get_symbols(market_type: str = 'futures'):
     global CACHED_SYMBOLS, LAST_CACHE_TIME, CACHED_STOCKS, LAST_STOCK_CACHE_TIME
+    
+    print(f"Requesting symbols for {market_type}...")
     
     if market_type == 'stock':
         # 股票列表缓存

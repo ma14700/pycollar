@@ -56,6 +56,10 @@ class TrendFollowingStrategy(bt.Strategy):
         # 交易状态变量
         self.stop_price = None  # 止损价格
         self.order = None       # 当前挂单
+        
+        # 记录最大盈利/亏损点数
+        self.max_profit_points = 0.0
+        self.max_loss_points = 0.0
 
     def _calculate_size(self, value):
         atr_val = self.atr[0]
@@ -137,6 +141,12 @@ class TrendFollowingStrategy(bt.Strategy):
             try:
                 points = trade.pnl / (closed_size * self.params.contract_multiplier)
                 points_msg = f", 盈亏点数: {points:.2f}"
+                
+                # 更新最大盈利/亏损点数
+                if points > self.max_profit_points:
+                    self.max_profit_points = points
+                if points < self.max_loss_points:
+                    self.max_loss_points = points
             except ZeroDivisionError:
                 pass
         
@@ -357,6 +367,10 @@ class MA55BreakoutStrategy(bt.Strategy):
         self.current_wave_macd_max = -9999
         self.current_wave_low_price = 999999
         self.current_wave_macd_min = 9999
+        
+        # 记录最大盈利/亏损点数
+        self.max_profit_points = 0.0
+        self.max_loss_points = 0.0
 
     def start(self):
         if self.params.print_log:
@@ -410,6 +424,12 @@ class MA55BreakoutStrategy(bt.Strategy):
             try:
                 points = trade.pnl / (closed_size * self.params.contract_multiplier)
                 points_msg = f", 盈亏点数: {points:.2f}"
+                
+                # 更新最大盈利/亏损点数
+                if points > self.max_profit_points:
+                    self.max_profit_points = points
+                if points < self.max_loss_points:
+                    self.max_loss_points = points
             except ZeroDivisionError:
                 pass
         
@@ -686,6 +706,10 @@ class MA55TouchExitStrategy(bt.Strategy):
         self.bar1_low = 0               # 第二根 K 线最低价
         
         self.pending_exit_check = False # 是否处于等待平仓确认状态
+        
+        # 记录最大盈利/亏损点数
+        self.max_profit_points = 0.0
+        self.max_loss_points = 0.0
 
     def start(self):
         if self.params.print_log:
@@ -731,6 +755,12 @@ class MA55TouchExitStrategy(bt.Strategy):
             try:
                 points = trade.pnl / (closed_size * self.params.contract_multiplier)
                 points_msg = f", 盈亏点数: {points:.2f}"
+                
+                # 更新最大盈利/亏损点数
+                if points > self.max_profit_points:
+                    self.max_profit_points = points
+                if points < self.max_loss_points:
+                    self.max_loss_points = points
             except ZeroDivisionError:
                 pass
         
@@ -933,6 +963,10 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
         self.crossover = bt.indicators.CrossOver(self.ma_fast, self.ma_slow)
         
         self.order = None
+        
+        # 记录最大盈利/亏损点数
+        self.max_profit_points = 0.0
+        self.max_loss_points = 0.0
 
     def start(self):
         if self.params.print_log:
@@ -984,6 +1018,12 @@ class MA20MA55CrossoverStrategy(bt.Strategy):
             try:
                 points = trade.pnl / (closed_size * self.params.contract_multiplier)
                 points_msg = f", 盈亏点数: {points:.2f}"
+                
+                # 更新最大盈利/亏损点数
+                if points > self.max_profit_points:
+                    self.max_profit_points = points
+                if points < self.max_loss_points:
+                    self.max_loss_points = points
             except ZeroDivisionError:
                 pass
         
@@ -1342,4 +1382,78 @@ class DKXStrategy(MA20MA55CrossoverStrategy):
                 self.order = self.order_target_size(target=-size)
             else:
                 self.log(f'DKX死叉触发但计算仓位为0')
+
+
+class DKXPartialTakeProfitStrategy(DKXStrategy):
+    params = (
+        ('dkx_period', 20),
+        ('dkx_ma_period', 10),
+        ('take_profit_points', 0),
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.partial_exit_executed = False
+
+    def next(self):
+        if len(self) >= self.datas[0].buflen() - 2:
+            if self.position:
+                self.log(f'回测即将结束，强制平仓: {self.datas[0].close[0]:.2f}')
+                self.order = self.close()
+            return
+
+        if self.order:
+            return
+
+        if self.position.size == 0:
+            self.partial_exit_executed = False
+
+        value = self.broker.get_value()
+        signal_triggered = False
+
+        if self.crossover > 0:
+            self.log(f'DKX金叉信号 (DKX > MADKX): {self.dkx_ind.dkx[0]:.2f} > {self.dkx_ind.madkx[0]:.2f}')
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做多/反手做多: 目标持仓 {size}')
+                self.order = self.order_target_size(target=size)
+                self.partial_exit_executed = False
+                signal_triggered = True
+            else:
+                self.log(f'DKX金叉触发但计算仓位为0')
+
+        elif self.crossover < 0:
+            self.log(f'DKX死叉信号 (DKX < MADKX): {self.dkx_ind.dkx[0]:.2f} < {self.dkx_ind.madkx[0]:.2f}')
+            size = self._calculate_size(value)
+            if size > 0:
+                self.log(f'执行做空/反手做空: 目标持仓 {-size}')
+                self.order = self.order_target_size(target=-size)
+                self.partial_exit_executed = False
+                signal_triggered = True
+            else:
+                self.log(f'DKX死叉触发但计算仓位为0')
+
+        if signal_triggered:
+            return
+
+        if self.position.size != 0 and self.params.take_profit_points > 0 and not self.partial_exit_executed:
+            current_price = self.datas[0].close[0]
+            entry_price = self.position.price
+
+            if self.position.size > 0:
+                profit_points = current_price - entry_price
+            else:
+                profit_points = entry_price - current_price
+
+            if profit_points >= self.params.take_profit_points:
+                current_size = abs(self.position.size)
+                exit_size = current_size // 2
+
+                if exit_size > 0:
+                    self.log(f'达到盈利点数 {profit_points:.2f} >= {self.params.take_profit_points}, 执行平半仓: {exit_size}手')
+                    if self.position.size > 0:
+                        self.order = self.sell(size=exit_size)
+                    else:
+                        self.order = self.buy(size=exit_size)
+                    self.partial_exit_executed = True
 

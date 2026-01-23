@@ -122,11 +122,14 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
     fetch_symbol = symbol
     if data_source == 'weighted':
         # 尝试将主力合约代码转换为加权代码
-        # 约定：如果代码以0结尾（如V0），替换为13（如V13）；否则追加13
+        # 用户反馈：加权一般是888 (如 SH888)
+        # 之前的逻辑是 13，现在优先尝试 888
         if symbol.endswith('0'):
-            fetch_symbol = symbol.replace('0', '13')
+            fetch_symbol = symbol.replace('0', '888')
+        elif symbol.endswith('888'):
+            fetch_symbol = symbol
         else:
-            fetch_symbol = symbol + '13'
+            fetch_symbol = symbol + '888'
         print(f"请求加权数据，转换代码: {symbol} -> {fetch_symbol}")
 
     print(f"正在从 AkShare 获取期货({fetch_symbol}) {period} 数据 (Source: {data_source})...")
@@ -141,16 +144,21 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
             except Exception as e_weighted:
                 if data_source == 'weighted':
                     print(f"加权数据({fetch_symbol})获取失败: {e_weighted}")
-                    print(f"尝试其他加权代码格式 (如 Index)...")
+                    print(f"尝试其他加权代码格式 (如 13, Index)...")
                     alternatives = []
-                    base_symbol = symbol.rstrip('0') if symbol.endswith('0') else symbol
-                    alternatives.append(f"{base_symbol}Index")
-                    alternatives.append(f"{base_symbol}88")
-                    alternatives.append(f"{base_symbol}99")
+                    base_symbol = symbol.rstrip('0') if symbol.endswith('0') else symbol.replace('888', '')
+                    
+                    # 尝试列表
+                    alternatives.append(f"{base_symbol}13")      # 旧版加权/指数
+                    alternatives.append(f"{base_symbol}Index")   # 指数
+                    alternatives.append(f"{base_symbol}88")      # 其他可能
+                    alternatives.append(f"{base_symbol}99")      # 其他可能
+                    alternatives.append(f"{base_symbol}0")       # 主力 (作为最后尝试，但通常走fallback逻辑)
                     
                     found = False
                     for alt in alternatives:
                         try:
+                            if alt == fetch_symbol: continue
                             print(f"尝试: {alt}")
                             df = ak.futures_zh_daily_sina(symbol=alt)
                             if df is not None and not df.empty:
@@ -196,7 +204,9 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
                 if data_source == 'weighted':
                     print(f"加权分钟数据({fetch_symbol})获取失败: {e_weighted}")
                     alternatives = []
-                    base_symbol = symbol.rstrip('0') if symbol.endswith('0') else symbol
+                    base_symbol = symbol.rstrip('0') if symbol.endswith('0') else symbol.replace('888', '')
+                    
+                    alternatives.append(f"{base_symbol}13")
                     alternatives.append(f"{base_symbol}Index")
                     alternatives.append(f"{base_symbol}88")
                     alternatives.append(f"{base_symbol}99")
@@ -204,6 +214,7 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
                     found = False
                     for alt in alternatives:
                         try:
+                            if alt == fetch_symbol: continue
                             print(f"尝试分钟数据: {alt}")
                             df = ak.futures_zh_minute_sina(symbol=alt, period=period)
                             if df is not None and not df.empty:

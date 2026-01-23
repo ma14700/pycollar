@@ -37,6 +37,7 @@ const App = () => {
 
   const [strategyType, setStrategyType] = useState('MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
+  const [selectedMddInfo, setSelectedMddInfo] = useState(null);
   
   // 缓存全量数据
   const [futuresList, setFuturesList] = useState([]);
@@ -140,6 +141,15 @@ const App = () => {
           form.setFieldsValue({ contract_multiplier: selected.multiplier });
       }
       fetchQuote(value);
+  };
+
+  const onChartClick = (params) => {
+      console.log('Chart click params:', params);
+      if (!params) return;
+      
+      if (params.componentType === 'markPoint' && params.name === '最大回撤') {
+          setSelectedMddInfo(params.data);
+      }
   };
 
   const onFinish = async (values) => {
@@ -247,8 +257,8 @@ const App = () => {
         };
       } else if (strategyType === 'DKXStrategy') {
         params = {
-            dkx_period: 20,
-            dkx_ma_period: 10,
+            dkx_period: values.dkx_period ? parseInt(values.dkx_period) : 20,
+            dkx_ma_period: values.dkx_ma_period ? parseInt(values.dkx_ma_period) : 10,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
@@ -257,6 +267,20 @@ const App = () => {
             size_mode: values.size_mode || 'fixed',
             fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier
+        };
+      } else if (strategyType === 'DKXPartialTakeProfitStrategy') {
+        params = {
+            dkx_period: values.dkx_period ? parseInt(values.dkx_period) : 20,
+            dkx_ma_period: values.dkx_ma_period ? parseInt(values.dkx_ma_period) : 10,
+            atr_period: 14,
+            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
+            risk_per_trade: riskPerTrade,
+            equity_percent: equityPercent,
+            margin_rate: marginRate,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
+            contract_multiplier: contractMultiplier,
+            take_profit_points: values.take_profit_points ? parseFloat(values.take_profit_points) : 0
         };
       }
 
@@ -407,51 +431,110 @@ const App = () => {
                             fontWeight: 'bold'
                         }
                     },
-                    data: results.trades ? results.trades.map(t => {
-                        // 根据 action 决定颜色和图标方向
-                        const action = t.action || '';
-                        let color = '#5470c6'; // 默认卖出颜色 (平多/卖空)
-                        let symbolRotate = 180;
-                        
-                        // 修正判断逻辑：包含“买”或者是“反手做多” -> 红色
-                        if (action.includes('买') || action === '平空' || action === '反手做多') {
-                            color = '#ef232a';
-                            symbolRotate = 0;
-                        }
-                        
-                        // 反手做空 -> 绿色
-                        if (action === '反手做空') {
-                            color = '#5470c6';
-                            symbolRotate = 180;
-                        }
-
-                        return {
-                            name: action || (t.type === 'buy' ? '买入' : '卖出'),
-                            coord: [t.date, t.price],
-                            value: t.price,
-                            tradeSize: t.size,
-                            position: t.position,
-                            symbol: 'arrow',
-                            symbolSize: 12,
-                            symbolRotate: symbolRotate,
-                            symbolOffset: [0, (action.includes('买') || action === '平空' || action === '反手做多') ? 10 : -10],
-                            itemStyle: {
-                                color: color
-                            },
-                            tooltip: {
-                                formatter: function (param) {
-                                    let sizeDisplay = t.size;
-                                    if (action.includes('反手') && t.position) {
-                                        sizeDisplay = `${t.size} (目标持仓: ${t.position})`;
-                                    }
-                                    return (action || (t.type === 'buy' ? '买入' : '卖出')) + 
-                                           '<br>时间: ' + t.date +
-                                           '<br>价格: ' + t.price + 
-                                           '<br>数量: ' + sizeDisplay;
-                                }
+                    data: results.trades ? (() => {
+                        const tradeMarkers = results.trades.map(t => {
+                            // 根据 action 决定颜色和图标方向
+                            const action = t.action || '';
+                            let color = '#5470c6'; // 默认卖出颜色 (平多/卖空)
+                            let symbolRotate = 180;
+                            
+                            // 修正判断逻辑：包含“买”或者是“反手做多” -> 红色
+                            if (action.includes('买') || action === '平空' || action === '反手做多') {
+                                color = '#ef232a';
+                                symbolRotate = 0;
                             }
-                        };
-                    }) : []
+                            
+                            // 反手做空 -> 绿色
+                            if (action === '反手做空') {
+                                color = '#5470c6';
+                                symbolRotate = 180;
+                            }
+
+                            return {
+                                name: action || (t.type === 'buy' ? '买入' : '卖出'),
+                                coord: [t.date, t.price],
+                                value: t.price,
+                                tradeSize: t.size,
+                                position: t.position,
+                                symbol: 'arrow',
+                                symbolSize: 12,
+                                symbolRotate: symbolRotate,
+                                symbolOffset: [0, (action.includes('买') || action === '平空' || action === '反手做多') ? 10 : -10],
+                                itemStyle: {
+                                    color: color
+                                },
+                                tooltip: {
+                                    formatter: function (param) {
+                                        let sizeDisplay = t.size;
+                                        if (action.includes('反手') && t.position) {
+                                            sizeDisplay = `${t.size} (目标持仓: ${t.position})`;
+                                        }
+                                        return (action || (t.type === 'buy' ? '买入' : '卖出')) + 
+                                               '<br>时间: ' + t.date +
+                                               '<br>价格: ' + t.price + 
+                                               '<br>数量: ' + sizeDisplay;
+                                    }
+                                }
+                            };
+                        });
+
+                        const mddMarkers = [];
+                        results.trades.forEach(t => {
+                            if (t.mdd_price !== null && t.mdd_price !== undefined && t.mdd_date) {
+                                mddMarkers.push({
+                                    name: '最大回撤',
+                                    coord: [t.mdd_date, t.mdd_price],
+                                    value: t.mdd_price,
+                                    symbol: 'pin',
+                                    symbolSize: 20,
+                                    itemStyle: {
+                                        color: '#faad14'
+                                    },
+                                    // 显式传递数据到 data item 中，避免闭包问题
+                                    entry_price: t.entry_price,
+                                    mdd_price: t.mdd_price,
+                                    holding_direction: t.holding_direction,
+                                    mdd_date: t.mdd_date,
+                                    tooltip: {
+                                        formatter: function (param) {
+                                            const data = param.data;
+                                            
+                                            const parseVal = (val) => {
+                                                if (val === null || val === undefined || val === '') return null;
+                                                const num = parseFloat(val);
+                                                return isNaN(num) ? null : num;
+                                            };
+
+                                            const entryVal = parseVal(data.entry_price);
+                                            const mddVal = parseVal(data.mdd_price);
+                                            
+                                            const entryPriceStr = entryVal !== null ? entryVal.toFixed(2) : 'N/A';
+                                            const mddPriceStr = mddVal !== null ? mddVal.toFixed(2) : 'N/A';
+                                            
+                                            let lossPoints = 'N/A';
+                                            if (entryVal !== null && mddVal !== null) {
+                                                lossPoints = Math.abs(mddVal - entryVal).toFixed(2);
+                                            }
+                                            
+                                            const direction = data.holding_direction || '未知';
+                                            
+                                            return '最大回撤点<br>' +
+                                                   '方向: ' + direction + '<br>' +
+                                                   '开仓均价: ' + entryPriceStr + '<br>' +
+                                                   '回撤价格: ' + mddPriceStr + '<br>' +
+                                                   '亏损点数: ' + lossPoints + '<br>' +
+                                                   '日期: ' + (data.mdd_date || 'N/A');
+                                        }
+                                    },
+                                    label: {
+                                        show: false
+                                    }
+                                });
+                            }
+                        });
+
+                        return tradeMarkers.concat(mddMarkers);
+                    })() : []
                 }
             },
             {
@@ -487,7 +570,7 @@ const App = () => {
                 lineStyle: { opacity: 0.8, width: 2, color: '#999' }
             },
             {
-                name: 'Volume',
+                name: '成交量',
                 type: 'bar',
                 xAxisIndex: 1,
                 yAxisIndex: 1,
@@ -562,47 +645,88 @@ const App = () => {
 
         return {
             title: { text: 'K线图 & 交易信号' },
-            tooltip: {
-                trigger: 'axis',
-                axisPointer: {
-                    type: 'cross'
-                }
-            },
             legend: {
                 data: legendData,
                 selected: {
                     'MA5': false,
                     'MA10': false,
-                    'MA20': !showDKX,
-                    'MA55': !showDKX
+                    'MA20': true,
+                    'MA55': true,
+                    'DKX': true,
+                    'MADKX': true
                 }
             },
             grid: [
                 {
-                    left: '3%',
-                    right: '4%',
-                    top: '3%',
-                    height: '45%'
+                    left: '5%',
+                    right: '5%',
+                    top: '5%',
+                    height: '40%'
                 },
                 {
-                    left: '3%',
-                    right: '4%',
+                    left: '5%',
+                    right: '5%',
                     top: '50%',
                     height: '10%'
                 },
                 {
-                    left: '3%',
-                    right: '4%',
-                    top: '62%',
-                    height: '13%'
+                    left: '5%',
+                    right: '5%',
+                    top: '65%',
+                    height: '10%'
                 },
                 {
-                    left: '3%',
-                    right: '4%',
-                    top: '77%',
-                    height: '15%'
+                    left: '5%',
+                    right: '5%',
+                    top: '80%',
+                    height: '10%'
                 }
             ],
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: {
+                    type: 'cross'
+                },
+                formatter: function (params) {
+                    if (!params || !params.length) return '';
+                    const date = params[0].axisValue;
+                    let result = date + '<br/>';
+                    
+                    params.forEach(param => {
+                        const seriesName = param.seriesName;
+                        const marker = param.marker;
+                        const value = param.value;
+                        
+                        if (param.seriesType === 'candlestick') {
+                            if (Array.isArray(value) && value.length > 4) {
+                                const open = value[1];
+                                const close = value[2];
+                                const low = value[3];
+                                const high = value[4];
+                                
+                                result += `${marker} ${seriesName}<br/>
+                                           开盘: ${open}<br/>
+                                           收盘: ${close}<br/>
+                                           最低: ${low}<br/>
+                                           最高: ${high}<br/>`;
+                            }
+                        } else {
+                             let val = value;
+                             if (Array.isArray(value) && value.length > 1) val = value[1];
+                             if (val === undefined || val === null) val = param.data;
+                             
+                             if (typeof val === 'number') {
+                                 val = val.toFixed(2);
+                             } else if (val === null || val === undefined) {
+                                 val = '-';
+                             }
+                             
+                             result += `${marker} ${seriesName}: ${val}<br/>`;
+                        }
+                    });
+                    return result;
+                }
+            },
             xAxis: [
                 {
                     type: 'category',
@@ -710,6 +834,23 @@ const App = () => {
     };
   };
 
+  const getValueColor = (val, isPercentage = false) => {
+    if (val === null || val === undefined || val === '') return 'inherit';
+    
+    // 移除百分号等非数字字符进行判断
+    let numVal = val;
+    if (typeof val === 'string') {
+        numVal = parseFloat(val.replace(/%/g, ''));
+    }
+    
+    if (isNaN(numVal)) return 'inherit';
+    
+    // 大于0红色，小于0绿色，等于0默认
+    if (numVal > 0) return '#cf1322'; // Red
+    if (numVal < 0) return '#3f8600'; // Green
+    return 'inherit';
+  };
+
   const getMetricsData = () => {
     if (!results) return [];
     const m = results.metrics;
@@ -720,6 +861,12 @@ const App = () => {
       { key: '4', metric: '最大回撤', value: `${(m.max_drawdown || 0).toFixed(2)}%` },
       { key: '5', metric: '总交易次数', value: m.total_trades || 0 },
       { key: '6', metric: '胜率', value: `${(m.win_rate || 0).toFixed(2)}%` },
+      { key: '7', metric: '使用手数', value: m.used_size },
+      { key: '8', metric: '最大资金使用率', value: `${(m.max_capital_usage || 0).toFixed(2)}%` },
+      { key: '9', metric: '一手最终赚钱数', value: (m.one_hand_net_profit || 0).toFixed(2), useColor: true },
+      { key: '10', metric: '最多盈利差值平仓点数', value: (m.max_profit_points || 0).toFixed(2), useColor: true },
+      { key: '11', metric: '最亏平仓差值点数', value: (m.max_loss_points || 0).toFixed(2), useColor: true },
+      { key: '12', metric: '一手盈利百分数', value: `${(m.one_hand_profit_pct || 0).toFixed(2)}%`, useColor: true },
     ];
   };
 
@@ -787,7 +934,7 @@ const App = () => {
                             {({ getFieldValue }) => {
                                 const marketType = getFieldValue('market_type') || 'futures';
                                 return (
-                                    <Form.Item name="symbol" label="交易品种" rules={[{ required: true }]}>
+                                    <Form.Item name="symbol" label={`交易品种 (共${symbols.length}个)`} rules={[{ required: true }]}>
                                           <Select 
                                             onChange={onSymbolChange}
                                             showSearch
@@ -890,6 +1037,17 @@ const App = () => {
                                         fixed_size: 20,
                                         risk_per_trade: 0.02
                                     });
+                                } else if (val === 'DKXPartialTakeProfitStrategy') {
+                                    form.setFieldsValue({
+                                        dkx_period: 20,
+                                        dkx_ma_period: 10,
+                                        atr_period: 14,
+                                        atr_multiplier: 3.0,
+                                        size_mode: 'fixed',
+                                        fixed_size: 20,
+                                        risk_per_trade: 0.02,
+                                        take_profit_points: 50
+                                    });
                                 }
                             }}>
                                 <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
@@ -898,6 +1056,7 @@ const App = () => {
                                 <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
                                 <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
                                 <Option value="DKXStrategy">DKX多空线策略</Option>
+                                <Option value="DKXPartialTakeProfitStrategy">DKX多空线+盈利平半仓</Option>
                                 <Option value="TrendFollowingStrategy">双均线趋势跟踪</Option>
                             </Select>
                         </Form.Item>
@@ -936,19 +1095,26 @@ const App = () => {
                                     </Form.Item>
                                 )}
                             </>
-                        ) : strategyType === 'DKXStrategy' ? (
-                             <Row gutter={16}>
-                                 <Col span={12}>
-                                     <Form.Item name="dkx_period" label="DKX周期" tooltip="通常为20">
-                                       <Input type="number" />
+                        ) : (strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy') ? (
+                             <>
+                                 <Row gutter={16}>
+                                     <Col span={12}>
+                                         <Form.Item name="dkx_period" label="DKX周期" tooltip="通常为20">
+                                           <Input type="number" />
+                                         </Form.Item>
+                                     </Col>
+                                     <Col span={12}>
+                                         <Form.Item name="dkx_ma_period" label="MADKX周期" tooltip="通常为10">
+                                           <Input type="number" />
+                                         </Form.Item>
+                                     </Col>
+                                 </Row>
+                                 {strategyType === 'DKXPartialTakeProfitStrategy' && (
+                                     <Form.Item name="take_profit_points" label="盈利平半仓点数" tooltip="当浮动盈利达到此点数时，平掉一半仓位">
+                                         <Input type="number" />
                                      </Form.Item>
-                                 </Col>
-                                 <Col span={12}>
-                                     <Form.Item name="dkx_ma_period" label="MADKX周期" tooltip="通常为10">
-                                       <Input type="number" />
-                                     </Form.Item>
-                                 </Col>
-                             </Row>
+                                 )}
+                             </>
                         ) : (
                             <>
                                 <Form.Item name="ma_period" label="突破均线周期">
@@ -977,6 +1143,28 @@ const App = () => {
                             </>
                         )}
 
+                        {strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' ? (
+                            <>
+                                <Row gutter={16}>
+                                    <Col span={12}>
+                                        <Form.Item name="dkx_period" label="DKX周期">
+                                            <Input type="number" />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={12}>
+                                        <Form.Item name="dkx_ma_period" label="DKX均线周期">
+                                            <Input type="number" />
+                                        </Form.Item>
+                                    </Col>
+                                </Row>
+                                {strategyType === 'DKXPartialTakeProfitStrategy' && (
+                                    <Form.Item name="take_profit_points" label="止盈点数">
+                                        <Input type="number" />
+                                    </Form.Item>
+                                )}
+                            </>
+                        ) : null}
+
                         <Form.Item
                             noStyle
                             shouldUpdate={(prevValues, currentValues) => prevValues.size_mode !== currentValues.size_mode}
@@ -996,7 +1184,7 @@ const App = () => {
                             }}
                         </Form.Item>
 
-                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' ? (
+                        {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' ? (
                             <>
                                 <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                                     <Radio.Group>
@@ -1096,11 +1284,13 @@ const App = () => {
                                         <Statistic 
                                             title={item.metric} 
                                             value={item.value} 
-                                            valueStyle={{ 
-                                                color: item.metric === '净利润' 
-                                                    ? (parseFloat(item.value) > 0 ? '#cf1322' : '#3f8600') 
-                                                    : undefined 
-                                            }}
+                                            valueStyle={
+                                                item.useColor 
+                                                ? { color: getValueColor(item.value) } 
+                                                : (item.metric === '净利润' 
+                                                    ? { color: (parseFloat(item.value) > 0 ? '#cf1322' : '#3f8600') }
+                                                    : undefined)
+                                            }
                                         />
                                     </Col>
                                 ))}
@@ -1122,8 +1312,61 @@ const App = () => {
                                 </Radio.Group>
                             }
                         >
-                          <ReactECharts option={getOption()} style={{ height: 800 }} notMerge={true} />
+                          <ReactECharts 
+                            option={getOption()} 
+                            style={{ height: 800 }} 
+                            notMerge={false} 
+                            onEvents={{
+                                'click': onChartClick
+                            }}
+                          />
                         </Card>
+                        
+                        {selectedMddInfo && (
+                            <Card title="最大回撤详情" bordered={false} style={{ marginTop: '24px', backgroundColor: '#fffbe6', border: '1px solid #ffe58f' }}>
+                                <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap' }}>
+                                    <div>
+                                       <div style={{ fontSize: '12px', color: '#888' }}>日期</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedMddInfo.mdd_date}</div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '12px', color: '#888' }}>持仓方向</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedMddInfo.holding_direction}</div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '12px', color: '#888' }}>开仓均价</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
+                                            {(() => {
+                                                const val = parseFloat(selectedMddInfo.entry_price);
+                                                return !isNaN(val) ? val.toFixed(2) : 'N/A';
+                                            })()}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '12px', color: '#888' }}>最大回撤价格</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#cf1322' }}>
+                                            {(() => {
+                                                const val = parseFloat(selectedMddInfo.mdd_price);
+                                                return !isNaN(val) ? val.toFixed(2) : 'N/A';
+                                            })()}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '12px', color: '#888' }}>亏损点数</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#cf1322' }}>
+                                            {(() => {
+                                                const entry = parseFloat(selectedMddInfo.entry_price);
+                                                const mdd = parseFloat(selectedMddInfo.mdd_price);
+                                                if (!isNaN(entry) && !isNaN(mdd)) {
+                                                    return Math.abs(mdd - entry).toFixed(2);
+                                                }
+                                                return 'N/A';
+                                            })()}
+                                        </div>
+                                    </div>
+                                </div>
+                            </Card>
+                        )}
                       </div>
                     ) : (
                       <Card style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
