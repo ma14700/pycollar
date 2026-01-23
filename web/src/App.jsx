@@ -369,7 +369,7 @@ const App = () => {
         const ma10Series = (maData.ma10 && maData.ma10.length === rawData.length) ? maData.ma10 : calculateMA(10, rawData);
         const ma20Series = (maData.ma20 && maData.ma20.length === rawData.length) ? maData.ma20 : calculateMA(20, rawData);
         const ma55Series = (maData.ma55 && maData.ma55.length === rawData.length) ? maData.ma55 : calculateMA(55, rawData);
-        const showDKX = strategyType === 'DKXStrategy';
+        const showDKX = strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy';
 
         const equityCurve = results.equity_curve || [];
         let equitySeries = [];
