@@ -1,12 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip, Table } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip, Table, Space, Typography, Divider, Menu } from 'antd';
+import { 
+  ReloadOutlined, 
+  LineChartOutlined, 
+  CodeOutlined, 
+  FileTextOutlined, 
+  DashboardOutlined,
+  PlayCircleOutlined,
+  RiseOutlined,
+  FallOutlined,
+  TransactionOutlined,
+  AccountBookOutlined,
+  SafetyCertificateOutlined,
+  PercentageOutlined,
+  WalletOutlined,
+  ThunderboltOutlined
+} from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import Editor from '@monaco-editor/react';
 import dayjs from 'dayjs';
 
-const { Header, Content } = Layout;
+const { Header, Content, Sider } = Layout;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
@@ -38,6 +53,7 @@ const App = () => {
   const [strategyType, setStrategyType] = useState('MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
   const [selectedMddInfo, setSelectedMddInfo] = useState(null);
+  const [activeTab, setActiveTab] = useState('1');
   
   // 缓存全量数据
   const [futuresList, setFuturesList] = useState([]);
@@ -854,34 +870,65 @@ const App = () => {
   const getMetricsData = () => {
     if (!results) return [];
     const m = results.metrics;
+    const fmt = (val) => val ? parseFloat(val).toFixed(2) : '0.00';
+    const fmtPct = (val) => val ? `${parseFloat(val).toFixed(2)}%` : '0.00%';
+
     return [
-      { key: '1', metric: '最终权益', value: (m.final_value || 0).toFixed(2) },
-      { key: '2', metric: '净利润', value: (m.net_profit || 0).toFixed(2) },
-      { key: '3', metric: '夏普比率', value: (m.sharpe_ratio || 0).toFixed(4) },
-      { key: '4', metric: '最大回撤', value: `${(m.max_drawdown || 0).toFixed(2)}%` },
-      { key: '5', metric: '总交易次数', value: m.total_trades || 0 },
-      { key: '6', metric: '胜率', value: `${(m.win_rate || 0).toFixed(2)}%` },
-      { key: '7', metric: '使用手数', value: m.used_size },
-      { key: '8', metric: '最大资金使用率', value: `${(m.max_capital_usage || 0).toFixed(2)}%` },
-      { key: '9', metric: '一手最终赚钱数', value: (m.one_hand_net_profit || 0).toFixed(2), useColor: true },
-      { key: '10', metric: '最多盈利差值平仓点数', value: (m.max_profit_points || 0).toFixed(2), useColor: true },
-      { key: '11', metric: '最亏平仓差值点数', value: (m.max_loss_points || 0).toFixed(2), useColor: true },
-      { key: '12', metric: '一手盈利百分数', value: `${(m.one_hand_profit_pct || 0).toFixed(2)}%`, useColor: true },
+      { key: '1', metric: '最终权益', value: fmt(m.final_value), icon: <WalletOutlined />, color: '#722ed1', bg: '#f9f0ff' },
+      { key: '2', metric: '净利润', value: fmt(m.net_profit), icon: <AccountBookOutlined />, color: m.net_profit > 0 ? '#cf1322' : '#3f8600', bg: '#fff1f0', isPnl: true },
+      { key: '3', metric: '夏普比率', value: (m.sharpe_ratio || 0).toFixed(4), icon: <SafetyCertificateOutlined />, color: '#faad14', bg: '#fffbe6' },
+      { key: '4', metric: '最大回撤', value: fmtPct(m.max_drawdown), icon: <FallOutlined />, color: '#52c41a', bg: '#f6ffed' },
+      { key: '5', metric: '总交易次数', value: m.total_trades || 0, icon: <CodeOutlined />, color: '#1890ff', bg: '#e6f7ff' },
+      { key: '6', metric: '胜率', value: fmtPct(m.win_rate), icon: <RiseOutlined />, color: '#cf1322', bg: '#fff1f0' },
+      { key: '7', metric: '使用手数', value: m.used_size, icon: <FileTextOutlined />, color: '#595959', bg: '#fafafa' },
+      { key: '8', metric: '最大资金使用率', value: fmtPct(m.max_capital_usage), icon: <ThunderboltOutlined />, color: '#fa8c16', bg: '#fff7e6' },
+      { key: '9', metric: '一手最终赚钱数', value: fmt(m.one_hand_net_profit), icon: <TransactionOutlined />, color: '#13c2c2', bg: '#e6fffb', isPnl: true },
+      { key: '10', metric: '最大盈利点', value: fmt(m.max_profit_points), icon: <RiseOutlined />, color: '#f5222d', bg: '#fff1f0' },
+      { key: '11', metric: '最大亏损点', value: fmt(m.max_loss_points), icon: <FallOutlined />, color: '#2f54eb', bg: '#f0f5ff' },
+      { key: '12', metric: '一手盈利百分数', value: fmtPct(m.one_hand_profit_pct), icon: <PercentageOutlined />, color: '#eb2f96', bg: '#fff0f6', isPnl: true },
     ];
   };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ color: 'white', fontSize: '20px', display: 'flex', alignItems: 'center' }}>
-        AI量化策略回测平台
+      <Header style={{ 
+        background: 'linear-gradient(90deg, #001529 0%, #003a8c 100%)', 
+        padding: '0 24px', 
+        color: 'white', 
+        display: 'flex', 
+        alignItems: 'center', 
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        zIndex: 10,
+        height: '64px'
+      }}>
+        <DashboardOutlined style={{ fontSize: '24px', marginRight: '12px', color: '#1890ff' }} />
+        <div style={{ fontSize: '20px', fontWeight: 'bold', letterSpacing: '1px' }}>
+          AI 量化策略回测平台
+        </div>
       </Header>
-      <Content style={{ padding: '24px', backgroundColor: '#f0f2f5' }}>
-        <Tabs defaultActiveKey="1" type="card">
-            <TabPane tab="策略回测" key="1">
-                <Row gutter={24}>
-                  <Col span={6}>
-                    <Card title="策略配置" bordered={false} style={{ height: '100%' }}>
-                      <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{
+      <Content style={{ padding: '0', backgroundColor: '#f0f2f5', overflow: 'hidden' }}>
+        <Layout style={{ height: 'calc(100vh - 64px)', background: '#f0f2f5' }}>
+            <Sider width={220} style={{ background: '#001529', height: '100%', overflowY: 'auto' }}>
+                <Menu
+                    mode="inline"
+                    defaultSelectedKeys={['1']}
+                    style={{ height: '100%', borderRight: 0 }}
+                    theme="dark"
+                    onSelect={({ key }) => setActiveTab(key)}
+                    items={[
+                        { key: '1', icon: <LineChartOutlined />, label: '策略回测' },
+                        { key: '2', icon: <CodeOutlined />, label: '代码编辑' },
+                        { key: '3', icon: <FileTextOutlined />, label: '交易日志' }
+                    ]}
+                />
+            </Sider>
+            <Content style={{ height: '100%', overflowY: 'auto', backgroundColor: '#f0f2f5' }}>
+                <div style={{ display: activeTab === '1' ? 'block' : 'none', height: '100%' }}>
+                    <div style={{ padding: '24px', minHeight: '100%' }}>
+                        <Row gutter={24} style={{ height: '100%' }}>
+                          <Col span={6}>
+                            <Card title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                              <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{
                         market_type: 'futures',
                         initial_cash: 1000000,
                         period: 'daily',
@@ -1242,13 +1289,29 @@ const App = () => {
                         </Form.Item>
 
                         <Form.Item>
-                          <Button type="primary" htmlType="submit" loading={loading} block size="large">
+                          <Button 
+                            type="primary" 
+                            htmlType="submit" 
+                            loading={loading} 
+                            block 
+                            size="large"
+                            icon={<PlayCircleOutlined />}
+                            style={{ 
+                                height: '48px', 
+                                fontSize: '18px', 
+                                fontWeight: 'bold', 
+                                borderRadius: '6px', 
+                                background: 'linear-gradient(90deg, #1890ff 0%, #096dd9 100%)', 
+                                border: 'none',
+                                boxShadow: '0 4px 14px 0 rgba(24, 144, 255, 0.39)'
+                            }}
+                          >
                             开始回测
                           </Button>
                         </Form.Item>
                         <Form.Item>
                              <Tooltip title="重新运行回测以刷新图表">
-                                <Button icon={<ReloadOutlined />} onClick={form.submit} block>
+                                <Button icon={<ReloadOutlined />} onClick={form.submit} block size="large">
                                     刷新图表
                                 </Button>
                              </Tooltip>
@@ -1277,21 +1340,34 @@ const App = () => {
                             />
                         )}
                         
-                        <Card title="回测概览" bordered={false}>
+                        <Card 
+                            title={<span><DashboardOutlined /> 回测概览</span>} 
+                            variant="borderless"
+                            style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
+                        >
                             <Row gutter={[16, 16]}>
                                 {getMetricsData().map(item => (
                                     <Col span={4} key={item.key}>
-                                        <Statistic 
-                                            title={item.metric} 
-                                            value={item.value} 
-                                            valueStyle={
-                                                item.useColor 
-                                                ? { color: getValueColor(item.value) } 
-                                                : (item.metric === '净利润' 
-                                                    ? { color: (parseFloat(item.value) > 0 ? '#cf1322' : '#3f8600') }
-                                                    : undefined)
-                                            }
-                                        />
+                                        <Card 
+                                            variant="borderless" 
+                                            bodyStyle={{ padding: '16px', background: item.bg, borderRadius: '8px', transition: 'all 0.3s' }}
+                                            hoverable
+                                            style={{ height: '100%' }}
+                                        >
+                                            <Statistic 
+                                                title={<span style={{ color: '#666', fontSize: '13px', display: 'flex', alignItems: 'center' }}>{item.metric}</span>}
+                                                value={item.value} 
+                                                valueStyle={{ 
+                                                    color: item.isPnl 
+                                                        ? (parseFloat(item.value) > 0 ? '#cf1322' : (parseFloat(item.value) < 0 ? '#3f8600' : '#333'))
+                                                        : '#333',
+                                                    fontSize: '20px',
+                                                    fontWeight: 'bold',
+                                                    marginTop: '4px'
+                                                }}
+                                                prefix={<span style={{ color: item.color, marginRight: '8px', fontSize: '20px', verticalAlign: 'middle' }}>{item.icon}</span>}
+                                            />
+                                        </Card>
                                     </Col>
                                 ))}
                             </Row>
@@ -1299,16 +1375,20 @@ const App = () => {
                         
                         <Card 
                             title={
-                                chartType === 'line' ? "账户权益曲线" : 
-                                chartType === 'kline' ? "K线图 & 交易信号" :
-                                "盈亏分布分析"
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <LineChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
+                                    {chartType === 'line' ? "账户权益曲线" : 
+                                     chartType === 'kline' ? "K线图 & 交易信号" :
+                                     "盈亏分布分析"}
+                                </div>
                             } 
-                            bordered={false}
+                            variant="borderless"
+                            style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
                             extra={
-                                <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)}>
-                                    <Radio.Button value="line">趋势图</Radio.Button>
-                                    <Radio.Button value="kline">K线图</Radio.Button>
-                                    <Radio.Button value="pie">饼状图</Radio.Button>
+                                <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)} buttonStyle="solid">
+                                    <Radio.Button value="line"><LineChartOutlined /> 趋势图</Radio.Button>
+                                    <Radio.Button value="kline"><ThunderboltOutlined /> K线图</Radio.Button>
+                                    <Radio.Button value="pie"><PercentageOutlined /> 饼状图</Radio.Button>
                                 </Radio.Group>
                             }
                         >
@@ -1323,7 +1403,7 @@ const App = () => {
                         </Card>
                         
                         {selectedMddInfo && (
-                            <Card title="最大回撤详情" bordered={false} style={{ marginTop: '24px', backgroundColor: '#fffbe6', border: '1px solid #ffe58f' }}>
+                            <Card title="最大回撤详情" variant="borderless" style={{ marginTop: '24px', backgroundColor: '#fffbe6', border: '1px solid #ffe58f' }}>
                                 <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap' }}>
                                     <div>
                                        <div style={{ fontSize: '12px', color: '#888' }}>日期</div>
@@ -1375,122 +1455,128 @@ const App = () => {
                           <p>请在左侧配置策略参数，点击“开始回测”查看结果</p>
                         </div>
                       </Card>
-                    )}
-                  </Col>
-                </Row>
-            </TabPane>
-            
-            <TabPane tab="策略代码编辑器" key="2">
-                <Card 
-                    title="编辑策略逻辑 (server/core/strategy.py)" 
-                    extra={
-                        <Button type="primary" onClick={saveStrategyCode} loading={savingCode}>
-                            保存并生效
-                        </Button>
-                    }
-                    style={{ height: 'calc(100vh - 120px)' }}
-                    bodyStyle={{ height: 'calc(100% - 60px)', padding: 0 }}
-                >
-                    <Editor
-                        height="100%"
-                        defaultLanguage="python"
-                        value={strategyCode}
-                        onChange={(value) => setStrategyCode(value)}
-                        theme="vs-dark"
-                        options={{
-                            minimap: { enabled: false },
-                            fontSize: 14,
-                            scrollBeyondLastLine: false,
-                        }}
-                    />
-                </Card>
-            </TabPane>
+                  )}
+                        </Col>
+                    </Row>
+                </div>
+              </div>
 
-            <TabPane tab="交易日志" key="3">
-                <Card 
-                    title="详细交易日志" 
-                    style={{ height: 'calc(100vh - 120px)' }}
-                    bodyStyle={{ height: 'calc(100% - 60px)', padding: '0' }}
-                >
-                    {results && results.logs ? (
-                        <Table 
-                            dataSource={results.logs.map((log, index) => {
-                                const firstComma = log.indexOf(',');
-                                const date = firstComma !== -1 ? log.substring(0, firstComma).trim() : '';
-                                const content = firstComma !== -1 ? log.substring(firstComma + 1).trim() : log;
-                                
-                                let type = 'info';
-                                if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
-                                else if (content.includes('卖出') || content.includes('开空') || content.includes('做空') || content.includes('平仓')) type = 'sell';
-                                else if (content.includes('交易利润')) type = 'profit';
-                                else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
-                                else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
-
-                                let pnl = null;
-                                if (type === 'profit') {
-                                    const match = content.match(/净利\s*([-\d.]+)/);
-                                    if (match) pnl = parseFloat(match[1]);
-                                }
-
-                                return { key: index, date, content, type, pnl };
-                            })}
-                            columns={[
-                                { 
-                                    title: '时间', 
-                                    dataIndex: 'date', 
-                                    width: 180,
-                                    sorter: (a, b) => new Date(a.date) - new Date(b.date),
-                                    defaultSortOrder: 'ascend'
-                                },
-                                { 
-                                    title: '类型', 
-                                    dataIndex: 'type', 
-                                    width: 100,
-                                    filters: [
-                                        { text: '买入', value: 'buy' },
-                                        { text: '卖出', value: 'sell' },
-                                        { text: '结算', value: 'profit' },
-                                        { text: '信号', value: 'signal' },
-                                        { text: '系统', value: 'system' },
-                                        { text: '信息', value: 'info' }
-                                    ],
-                                    onFilter: (value, record) => record.type === value,
-                                    render: (type) => {
-                                        const config = {
-                                            'buy': { color: '#f50', text: '买入' },
-                                            'sell': { color: '#87d068', text: '卖出' },
-                                            'profit': { color: 'gold', text: '结算' },
-                                            'signal': { color: 'blue', text: '信号' },
-                                            'system': { color: 'default', text: '系统' },
-                                            'info': { color: 'default', text: '信息' }
-                                        };
-                                        const c = config[type] || config['info'];
-                                        return <Tag color={c.color}>{c.text}</Tag>;
-                                    }
-                                },
-                                { 
-                                    title: '内容', 
-                                    dataIndex: 'content',
-                                    render: (text) => <span style={{ fontFamily: 'monospace' }}>{text}</span>
-                                },
-                                { 
-                                    title: '净利', 
-                                    dataIndex: 'pnl', 
-                                    width: 120,
-                                    sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
-                                    render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toFixed(2)}</span> : '-' 
-                                }
-                            ]}
-                            pagination={{ pageSize: 50, showSizeChanger: true }}
-                            scroll={{ y: 'calc(100vh - 250px)' }}
-                            size="small"
-                            rowKey="key"
-                            bordered
+                <div style={{ display: activeTab === '2' ? 'block' : 'none', height: '100%' }}>
+                    <Card 
+                        title={<span><CodeOutlined /> 编辑策略逻辑 (server/core/strategy.py)</span>}
+                        extra={
+                            <Button type="primary" onClick={saveStrategyCode} loading={savingCode} icon={<CodeOutlined />}>
+                                保存并生效
+                            </Button>
+                        }
+                        variant="borderless"
+                        style={{ height: '100%' }}
+                        bodyStyle={{ height: 'calc(100% - 60px)', padding: 0 }}
+                    >
+                        <Editor
+                            height="100%"
+                            defaultLanguage="python"
+                            value={strategyCode}
+                            onChange={(value) => setStrategyCode(value)}
+                            theme="vs-dark"
+                            options={{
+                                minimap: { enabled: false },
+                                fontSize: 14,
+                                scrollBeyondLastLine: false,
+                            }}
                         />
-                    ) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据，请先运行回测</div>}
-                </Card>
-            </TabPane>
-        </Tabs>
+                    </Card>
+                </div>
+
+                <div style={{ display: activeTab === '3' ? 'block' : 'none', height: '100%' }}>
+                    <div style={{ padding: '24px', height: '100%' }}>
+                        <Card 
+                            title={<span><FileTextOutlined /> 详细交易日志</span>} 
+                            variant="borderless"
+                            style={{ height: '100%', borderRadius: '8px' }}
+                            bodyStyle={{ height: 'calc(100% - 60px)', padding: '0' }}
+                        >
+                            {results && results.logs ? (
+                                <Table 
+                                    dataSource={results.logs.map((log, index) => {
+                                        const firstComma = log.indexOf(',');
+                                        const date = firstComma !== -1 ? log.substring(0, firstComma).trim() : '';
+                                        const content = firstComma !== -1 ? log.substring(firstComma + 1).trim() : log;
+                                        
+                                        let type = 'info';
+                                        if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
+                                        else if (content.includes('卖出') || content.includes('开空') || content.includes('做空') || content.includes('平仓')) type = 'sell';
+                                        else if (content.includes('交易利润')) type = 'profit';
+                                        else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
+                                        else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
+
+                                        let pnl = null;
+                                        if (type === 'profit') {
+                                            const match = content.match(/净利\s*([-\d.]+)/);
+                                            if (match) pnl = parseFloat(match[1]);
+                                        }
+
+                                        return { key: index, date, content, type, pnl };
+                                    })}
+                                    columns={[
+                                        { 
+                                            title: '时间', 
+                                            dataIndex: 'date', 
+                                            width: 180,
+                                            sorter: (a, b) => new Date(a.date) - new Date(b.date),
+                                            defaultSortOrder: 'ascend'
+                                        },
+                                        { 
+                                            title: '类型', 
+                                            dataIndex: 'type', 
+                                            width: 100,
+                                            filters: [
+                                                { text: '买入', value: 'buy' },
+                                                { text: '卖出', value: 'sell' },
+                                                { text: '结算', value: 'profit' },
+                                                { text: '信号', value: 'signal' },
+                                                { text: '系统', value: 'system' },
+                                                { text: '信息', value: 'info' }
+                                            ],
+                                            onFilter: (value, record) => record.type === value,
+                                            render: (type) => {
+                                                const config = {
+                                                    'buy': { color: '#f50', text: '买入' },
+                                                    'sell': { color: '#87d068', text: '卖出' },
+                                                    'profit': { color: 'gold', text: '结算' },
+                                                    'signal': { color: 'blue', text: '信号' },
+                                                    'system': { color: 'default', text: '系统' },
+                                                    'info': { color: 'default', text: '信息' }
+                                                };
+                                                const c = config[type] || config['info'];
+                                                return <Tag color={c.color}>{c.text}</Tag>;
+                                            }
+                                        },
+                                        { 
+                                            title: '内容', 
+                                            dataIndex: 'content',
+                                            render: (text) => <span style={{ fontFamily: 'monospace' }}>{text}</span>
+                                        },
+                                        { 
+                                            title: '净利', 
+                                            dataIndex: 'pnl', 
+                                            width: 120,
+                                            sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
+                                            render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toFixed(2)}</span> : '-' 
+                                        }
+                                    ]}
+                                    pagination={{ pageSize: 50, showSizeChanger: true }}
+                                    scroll={{ y: 'calc(100vh - 250px)' }}
+                                    size="small"
+                                    rowKey="key"
+                                    bordered
+                                />
+                            ) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据，请先运行回测</div>}
+                        </Card>
+                    </div>
+                </div>
+            </Content>
+        </Layout>
       </Content>
     </Layout>
   );
