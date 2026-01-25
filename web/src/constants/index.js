@@ -1,0 +1,81 @@
+export const strategyNameMap = {
+  'MA55BreakoutStrategy': 'MA55突破+背离离场',
+  'MA55TouchExitStrategy': 'MA55突破+触碰平仓',
+  'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',
+  'StockMA20MA55LongOnlyStrategy': '20/55双均线多头(股票)',
+  'MA20MA55PartialTakeProfitStrategy': '20/55双均线+盈利平半仓',
+  'DKXStrategy': 'DKX多空线策略',
+  'DKXPartialTakeProfitStrategy': 'DKX多空线+盈利平半仓',
+  'DKXFixedTPSLStrategy': 'DKX多空线+固定止盈止损',
+  'TrendFollowingStrategy': '双均线趋势跟踪'
+};
+
+export const symbolMap = {
+  'BTC/USDT': '比特币',
+  'ETH/USDT': '以太坊',
+  'BNB/USDT': '币安币',
+  'SOL/USDT': '索拉纳',
+  'XRP/USDT': '瑞波币',
+  'DOGE/USDT': '狗狗币',
+  'ADA/USDT': '艾达币',
+  'AVAX/USDT': '雪崩协议',
+  'SHIB/USDT': '柴犬币',
+  'DOT/USDT': '波卡',
+  'TRX/USDT': '波场',
+  'MATIC/USDT': '马蹄币',
+  'LTC/USDT': '莱特币',
+  'LINK/USDT': '预言机',
+  'UNI/USDT': '独角兽',
+  'BCH/USDT': '比特币现金',
+  'ATOM/USDT': '阿童木',
+  'XLM/USDT': '恒星币',
+  'ETC/USDT': '以太经典',
+  'FIL/USDT': '文件币',
+  'APT/USDT': '阿普托斯',
+  'NEAR/USDT': 'NEAR协议',
+  'LDO/USDT': 'LDO',
+  'QNT/USDT': 'QNT',
+  'VET/USDT': '唯链',
+  'ICP/USDT': '互联网计算机',
+  'ARB/USDT': 'Arbitrum',
+  'OP/USDT': 'Optimism',
+  'GRT/USDT': 'Graph',
+  'ALGO/USDT': 'Algorand',
+  'STX/USDT': 'Stacks',
+  'EOS/USDT': '柚子币',
+  'XTZ/USDT': 'Tezos',
+  'IMX/USDT': 'Immutable',
+  'SAND/USDT': '沙盒',
+  'MANA/USDT': 'Decentraland',
+  'THETA/USDT': 'Theta',
+  'AAVE/USDT': 'Aave',
+  'AXS/USDT': 'Axie'
+};
+
+export const futuresMap = {
+  "CU": "铜", "AL": "铝", "ZN": "锌", "PB": "铅", "NI": "镍", "SN": "锡", 
+  "AU": "黄金", "AG": "白银", "RB": "螺纹钢", "WR": "线材", "HC": "热轧卷板", 
+  "FU": "燃油", "BU": "沥青", "RU": "天然橡胶", "SP": "纸浆", "SS": "不锈钢", 
+  "AO": "氧化铝", "BR": "丁二烯橡胶",
+  "M": "豆粕", "Y": "豆油", "A": "豆一", "B": "豆二", "P": "棕榈油", 
+  "C": "玉米", "CS": "玉米淀粉", "JD": "鸡蛋", "BB": "胶合板", "FB": "纤维板", 
+  "L": "塑料", "V": "PVC", "PP": "聚丙烯", "J": "焦炭", "JM": "焦煤", 
+  "I": "铁矿石", "EG": "乙二醇", "RR": "粳米", "EB": "苯乙烯", "PG": "液化石油气", 
+  "LH": "生猪",
+  "SR": "白糖", "CF": "棉花", "CY": "棉纱", "PM": "普麦", "WH": "强麦", 
+  "RI": "早缼稻", "LR": "晚缼稻", "JR": "粳稻", "RS": "油菜籽", "OI": "菜籽油", 
+  "RM": "菜籽粕", "SF": "硅铁", "SM": "锰硅", "TA": "PTA", "MA": "甲醇", 
+  "FG": "玻璃", "SA": "纯碱", "UR": "尿素", "AP": "苹果", "CJ": "红枣", 
+  "PK": "花生", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
+  "IF": "沪深300", "IC": "中证500", "IH": "上证50", "IM": "中证1000", 
+  "T": "10年期国债", "TF": "5年期国债", "TS": "2年期国债", "TL": "30年期国债",
+  "SC": "原油", "NR": "20号胶", "LU": "低硫燃料油", "BC": "国际铜", "EC": "欧线集运"
+};
+
+export const periodMap = {
+  'daily': '日线',
+  '60': '60分钟',
+  '30': '30分钟',
+  '15': '15分钟',
+  '5': '5分钟'
+};

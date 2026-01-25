@@ -33,8 +33,8 @@ class BacktestEngine:
         # 继承策略以捕获日志 (动态继承)
         class LoggingStrategy(StrategyClass):
 
-            def __init__(self):
-                super(LoggingStrategy, self).__init__()
+            def __init__(self, *args, **kwargs):
+                super(LoggingStrategy, self).__init__(*args, **kwargs)
                 self.logs = []
                 self.trades_history = []
                 self.exec_start_dt = None  # 执行窗口起始日期 (仅记录窗口内的日志与交易)
@@ -616,6 +616,38 @@ class BacktestEngine:
             "ma55": ma55.round(2).tolist()
         }
 
+        # 策略自定义均线计算 (用于前端展示策略实际使用的均线)
+        if 'fast_period' in strategy_params:
+            try:
+                p = int(strategy_params['fast_period'])
+                # 根据 ma_type 选择 SMA 或 EMA (默认 SMA)
+                is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
+                
+                if is_ema:
+                    kline_data['ma']['strategy_fast'] = close_series.ewm(span=p, adjust=False).mean().round(2).tolist()
+                else:
+                    kline_data['ma']['strategy_fast'] = close_series.rolling(window=p, min_periods=1).mean().round(2).tolist()
+                
+                kline_data['ma']['strategy_fast_period'] = p
+                kline_data['ma']['strategy_fast_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
+            except:
+                pass
+
+        if 'slow_period' in strategy_params:
+            try:
+                p = int(strategy_params['slow_period'])
+                is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
+                
+                if is_ema:
+                    kline_data['ma']['strategy_slow'] = close_series.ewm(span=p, adjust=False).mean().round(2).tolist()
+                else:
+                    kline_data['ma']['strategy_slow'] = close_series.rolling(window=p, min_periods=1).mean().round(2).tolist()
+                
+                kline_data['ma']['strategy_slow_period'] = p
+                kline_data['ma']['strategy_slow_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
+            except:
+                pass
+
         # 计算 MACD (无论策略是否使用，都计算以便前端展示)
         try:
             fast_period = int(strategy_params.get('macd_fast', 12))
@@ -638,7 +670,7 @@ class BacktestEngine:
             print(f"MACD Calculation Error: {e}")
             kline_data['macd'] = None
 
-        if strategy_name == 'DKXStrategy':
+        if strategy_name in ['DKXStrategy', 'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy']:
             try:
                 dkx_period = int(strategy_params.get('dkx_period', 20))
                 dkx_ma_period = int(strategy_params.get('dkx_ma_period', 10))

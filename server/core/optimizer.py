@@ -48,6 +48,18 @@ class StrategyOptimizer:
                  param_ranges['fixed_size'] = [1, 2, 3, 5]
              else:
                  param_ranges['risk_per_trade'] = [0.01, 0.02, 0.03, 0.05]
+        elif strategy_name in ['DKXStrategy', 'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy']:
+             param_ranges = {
+                'dkx_period': [10, 20, 30, 40],
+                'dkx_ma_period': [5, 10, 15, 20],
+                'atr_period': [10, 14, 20],
+                'atr_multiplier': [2.0, 3.0, 4.0],
+            }
+             if strategy_name == 'DKXPartialTakeProfitStrategy':
+                 param_ranges['take_profit_points'] = [30, 50, 80, 100, 150]
+             elif strategy_name == 'DKXFixedTPSLStrategy':
+                 param_ranges['tp_points'] = [50, 80, 100, 150, 200]
+                 param_ranges['sl_points'] = [30, 50, 80, 100]
         
         print(f"开始自动优化... 策略: {strategy_name}, 目标收益率: >{target_return}%, 最大尝试: {max_trials}次")
         
