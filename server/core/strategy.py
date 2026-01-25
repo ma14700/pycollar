@@ -24,6 +24,7 @@ class TrendFollowingStrategy(bt.Strategy):
         ('equity_percent', 0.1), # 资金比例 (0.1 = 10%)
         ('margin_rate', 0.1),    # 保证金率 (0.1 = 10%)
         ('start_date', None),    # 策略启动日期 (YYYY-MM-DD)，在此之前不交易
+        ('optimal_entry', False), # 开仓最优模式：是否使用K线中间点位作为执行价格
     )
 
     def log(self, txt, dt=None):
@@ -91,7 +92,7 @@ class TrendFollowingStrategy(bt.Strategy):
 
     def start(self):
         if self.params.print_log:
-            self.log(f"策略启动: TrendFollowingStrategy (趋势跟踪), 参数: Fast={self.params.fast_period}, Slow={self.params.slow_period}, ATR={self.params.atr_period}x{self.params.atr_multiplier}")
+            self.log(f"策略启动: TrendFollowingStrategy (趋势跟踪), 参数: Fast={self.params.fast_period}, Slow={self.params.slow_period}, ATR={self.params.atr_period}x{self.params.atr_multiplier}, 最优模式={self.params.optimal_entry}")
 
 
     def notify_order(self, order):
@@ -164,6 +165,19 @@ class TrendFollowingStrategy(bt.Strategy):
         self.log(f'交易结束: 毛利 {trade.pnl:.2f}, 净利 {trade.pnlcomm:.2f}{points_msg} (持仓周期: {trade.barlen}bars/{duration}天, 开仓均价: {trade.price:.2f})')
         self.log(f'账户资金变动: {prev_total_pnl:.2f} (前值) + {trade.pnlcomm:.2f} (本次) = {total_pnl:.2f} (当前总盈亏)')
 
+    def _get_execution_params(self):
+        """ 获取执行参数：如果开启最优模式，返回 Limit 订单和中间价格 """
+        exectype = bt.Order.Market
+        price = None
+        
+        if self.params.optimal_entry:
+            # 计算当前K线中间点位
+            mid_price = (self.datas[0].high[0] + self.datas[0].low[0]) / 2
+            exectype = bt.Order.Limit
+            price = mid_price
+            
+        return exectype, price
+
     def next(self):
         # 0. 严格的时间窗口控制
         if self.params.start_date:
@@ -211,8 +225,10 @@ class TrendFollowingStrategy(bt.Strategy):
                 size = self._calculate_size(value)
                 
                 if size > 0:
-                    self.log(f'买入信号 (金叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {size}')
-                    self.order = self.buy(size=size)
+                    exectype, price = self._get_execution_params()
+                    price_str = f", 价格 {price:.2f} (Limit)" if price else ""
+                    self.log(f'买入信号 (金叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {size}{price_str}')
+                    self.order = self.buy(size=size, exectype=exectype, price=price)
             
             # 死叉卖出 (做空)
             elif self.crossover < 0:
@@ -224,8 +240,10 @@ class TrendFollowingStrategy(bt.Strategy):
                 size = self._calculate_size(value)
                 
                 if size > 0:
-                    self.log(f'卖空信号 (死叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {-size}')
-                    self.order = self.sell(size=size)
+                    exectype, price = self._get_execution_params()
+                    price_str = f", 价格 {price:.2f} (Limit)" if price else ""
+                    self.log(f'卖空信号 (死叉): 收盘价 {self.datas[0].close[0]:.2f}, ATR {atr_value:.2f}, 目标仓位 {-size}{price_str}')
+                    self.order = self.sell(size=size, exectype=exectype, price=price)
                     
         # 2. 持有仓位
         else:
@@ -241,11 +259,13 @@ class TrendFollowingStrategy(bt.Strategy):
                     self.stop_price = self.datas[0].close[0] + stop_dist
                     size = self._calculate_size(value)
                     
+                    exectype, price = self._get_execution_params()
+
                     if size > 0:
                         # order_target_size 会自动处理平仓+开新仓
-                        self.order = self.order_target_size(target=-size)
+                        self.order = self.order_target_size(target=-size, exectype=exectype, price=price)
                     else:
-                        self.order = self.close() # 无法开新仓则仅平仓
+                        self.order = self.close(exectype=exectype, price=price) # 无法开新仓则仅平仓
                 
                 # 移动止损逻辑
                 else:
@@ -259,7 +279,18 @@ class TrendFollowingStrategy(bt.Strategy):
                     # 检查是否触发止损
                     if self.datas[0].close[0] < self.stop_price:
                         self.log(f'多单止损触发: 当前价 {self.datas[0].close[0]:.2f} < 止损价 {self.stop_price:.2f}')
-                        self.order = self.close()
+                        # 止损通常使用市价单，但若用户强制要求“所有操作”，可以考虑。
+                        # 通常止损是为了保命，应尽快成交 (Market)。
+                        # 用户需求：“所有开仓、平仓、反手操作”。止损是平仓的一种。
+                        # 但止损是条件触发，如果用 Limit 中间价，可能无法成交导致巨亏。
+                        # 这里我们保持 Market 止损，或者询问用户。
+                        # 根据常理，止损必须 Market。但如果“最优模式”意味着“回测作弊”，则可能也想优化止损。
+                        # 鉴于“最优模式”是“开仓最优”，且“平仓操作”也包含在内。
+                        # 暂且也应用该逻辑，如果用户意图是“作弊”的话。
+                        # 但止损触发时，价格已经到了 Stop Price。
+                        # 如果用当前K线中间价（可能远高于 Stop Price），那是极好的（止损在更好的价格）。
+                        exectype, price = self._get_execution_params()
+                        self.order = self.close(exectype=exectype, price=price)
 
             # 持有空单
             elif self.position.size < 0:
@@ -273,10 +304,12 @@ class TrendFollowingStrategy(bt.Strategy):
                     self.stop_price = self.datas[0].close[0] - stop_dist
                     size = self._calculate_size(value)
                     
+                    exectype, price = self._get_execution_params()
+
                     if size > 0:
-                        self.order = self.order_target_size(target=size)
+                        self.order = self.order_target_size(target=size, exectype=exectype, price=price)
                     else:
-                        self.order = self.close()
+                        self.order = self.close(exectype=exectype, price=price)
                 
                 # 移动止损逻辑
                 else:
@@ -297,7 +330,8 @@ class TrendFollowingStrategy(bt.Strategy):
                     # 检查是否触发止损 (价格上涨超过止损价)
                     if self.datas[0].close[0] > self.stop_price:
                         self.log(f'空单止损触发: 当前价 {self.datas[0].close[0]:.2f} > 止损价 {self.stop_price:.2f}')
-                        self.order = self.close()
+                        exectype, price = self._get_execution_params()
+                        self.order = self.close(exectype=exectype, price=price)
 
 
 class MA55BreakoutStrategy(bt.Strategy):

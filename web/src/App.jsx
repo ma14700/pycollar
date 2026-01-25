@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip, Table, Space, Typography, Divider, Menu } from 'antd';
+import { Layout, Card, Form, Input, Select, Button, Row, Col, Statistic, message, Radio, Tabs, Alert, Switch, Tag, DatePicker, Tooltip, Table, Space, Typography, Divider, Menu, Progress, Popconfirm, Descriptions } from 'antd';
 import { 
   ReloadOutlined, 
   LineChartOutlined, 
@@ -14,7 +14,11 @@ import {
   SafetyCertificateOutlined,
   PercentageOutlined,
   WalletOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  SaveOutlined,
+  HistoryOutlined,
+  ArrowLeftOutlined,
+  DeleteOutlined
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
@@ -25,13 +29,43 @@ const { Header, Content, Sider } = Layout;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
+// Helper function for parsing log items
+const parseLogItem = (log, index) => {
+    const logStr = String(log || '');
+    const firstComma = logStr.indexOf(',');
+    const date = firstComma !== -1 ? logStr.substring(0, firstComma).trim() : '';
+    const content = firstComma !== -1 ? logStr.substring(firstComma + 1).trim() : logStr;
+    
+    let type = 'info';
+    if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
+    else if (content.includes('卖出') || content.includes('开空') || content.includes('做空') || content.includes('平仓')) type = 'sell';
+    else if (content.includes('交易利润')) type = 'profit';
+    else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
+    else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
+
+    let pnl = null;
+    if (type === 'profit') {
+        const match = content.match(/净利\s*([-\d.]+)/);
+        if (match) pnl = parseFloat(match[1]);
+    }
+
+    return { key: index, date, content, type, pnl };
+};
+
 function calculateMA(dayCount, data) {
+  if (!Array.isArray(data)) return [];
   var result = [];
   var sum = 0;
   for (var i = 0, len = data.length; i < len; i++) {
+    if (!data[i] || data[i].length < 2) {
+        result.push('-');
+        continue;
+    }
     sum += data[i][1];
     if (i >= dayCount) {
-      sum -= data[i - dayCount][1];
+      if (data[i - dayCount] && data[i - dayCount].length >= 2) {
+          sum -= data[i - dayCount][1];
+      }
       result.push((sum / dayCount).toFixed(2));
     } else {
       result.push((sum / (i + 1)).toFixed(2));
@@ -40,7 +74,157 @@ function calculateMA(dayCount, data) {
   return result;
 }
 
+const ContractInfo = ({ form, quoteInfo }) => {
+    const initialCash = Form.useWatch('initial_cash', form);
+    const contractMultiplier = Form.useWatch('contract_multiplier', form);
+    const marginRate = Form.useWatch('margin_rate', form);
+    
+    if (!quoteInfo) return null;
+
+    const currentMultiplier = contractMultiplier || 1;
+    const currentInitialCash = parseFloat(initialCash || 0);
+    const currentMarginRate = parseFloat(marginRate || 0.12);
+    
+    // Auto-calculate entry price: Market Price * (1 + Margin Rate)
+    const basePrice = quoteInfo.price ? parseFloat(quoteInfo.price) : 0;
+    const calcPrice = basePrice * (1 + currentMarginRate);
+    
+    const oneHandValue = calcPrice * currentMultiplier;
+    // Note: Margin calculation typically uses the entry price. 
+    // If calcPrice is the simulated entry price, we use it for margin requirement estimation.
+    const maxHands = oneHandValue > 0 ? Math.floor(currentInitialCash / (oneHandValue * currentMarginRate)) : 0;
+    
+    return (
+        <div style={{ background: '#fafafa', padding: '12px', borderRadius: '6px', marginBottom: '24px', border: '1px solid #f0f0f0' }}>
+            <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>合约详情参考 ({quoteInfo.date})</div>
+            <Row gutter={[8, 8]}>
+                <Col span={12}>
+                    <div style={{ fontSize: '12px', color: '#666' }}>开仓价格 (参考)</div>
+                    <Tooltip title={`计算公式: 当前价格 × (1 + 保证金率 ${currentMarginRate})`}>
+                        <Input 
+                            size="small" 
+                            value={calcPrice.toFixed(2)} 
+                            disabled
+                            style={{ width: '100px', fontWeight: 'bold', color: '#595959', cursor: 'not-allowed', backgroundColor: '#f5f5f5' }} 
+                        />
+                    </Tooltip>
+                </Col>
+                <Col span={12}>
+                    <div style={{ fontSize: '12px', color: '#666' }}>1点价值</div>
+                    <div>{currentMultiplier} 元</div>
+                </Col>
+                <Col span={12}>
+                    <div style={{ fontSize: '12px', color: '#666' }}>一手合约价值</div>
+                    <div>{(oneHandValue / 10000).toFixed(2)} 万</div>
+                </Col>
+                <Col span={12}>
+                    <div style={{ fontSize: '12px', color: '#666' }}>最大可开({(currentMarginRate * 100).toFixed(0)}%保证金)</div>
+                    <div style={{ color: '#1890ff', fontWeight: 'bold' }}>{maxHands} 手</div>
+                </Col>
+            </Row>
+        </div>
+    );
+};
+
+// 策略名称映射
+const strategyNameMap = {
+  'MA55BreakoutStrategy': 'MA55突破+背离离场',
+  'MA55TouchExitStrategy': 'MA55突破+触碰平仓',
+  'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',
+  'StockMA20MA55LongOnlyStrategy': '20/55双均线多头(股票)',
+  'MA20MA55PartialTakeProfitStrategy': '20/55双均线+盈利平半仓',
+  'DKXStrategy': 'DKX多空线策略',
+  'DKXPartialTakeProfitStrategy': 'DKX多空线+盈利平半仓',
+  'TrendFollowingStrategy': '双均线趋势跟踪'
+};
+
+const symbolMap = {
+  'BTC/USDT': '比特币',
+  'ETH/USDT': '以太坊',
+  'BNB/USDT': '币安币',
+  'SOL/USDT': '索拉纳',
+  'XRP/USDT': '瑞波币',
+  'DOGE/USDT': '狗狗币',
+  'ADA/USDT': '艾达币',
+  'AVAX/USDT': '雪崩协议',
+  'SHIB/USDT': '柴犬币',
+  'DOT/USDT': '波卡',
+  'TRX/USDT': '波场',
+  'MATIC/USDT': '马蹄币',
+  'LTC/USDT': '莱特币',
+  'LINK/USDT': '预言机',
+  'UNI/USDT': '独角兽',
+  'BCH/USDT': '比特币现金',
+  'ATOM/USDT': '阿童木',
+  'XLM/USDT': '恒星币',
+  'ETC/USDT': '以太经典',
+  'FIL/USDT': '文件币',
+  'APT/USDT': '阿普托斯',
+  'NEAR/USDT': 'NEAR协议',
+  'LDO/USDT': 'LDO',
+  'QNT/USDT': 'QNT',
+  'VET/USDT': '唯链',
+  'ICP/USDT': '互联网计算机',
+  'ARB/USDT': 'Arbitrum',
+  'OP/USDT': 'Optimism',
+  'GRT/USDT': 'Graph',
+  'ALGO/USDT': 'Algorand',
+  'STX/USDT': 'Stacks',
+  'EOS/USDT': '柚子币',
+  'XTZ/USDT': 'Tezos',
+  'IMX/USDT': 'Immutable',
+  'SAND/USDT': '沙盒',
+  'MANA/USDT': 'Decentraland',
+  'THETA/USDT': 'Theta',
+  'AAVE/USDT': 'Aave',
+  'AXS/USDT': 'Axie'
+};
+
+const futuresMap = {
+  "CU": "铜", "AL": "铝", "ZN": "锌", "PB": "铅", "NI": "镍", "SN": "锡", 
+  "AU": "黄金", "AG": "白银", "RB": "螺纹钢", "WR": "线材", "HC": "热轧卷板", 
+  "FU": "燃油", "BU": "沥青", "RU": "天然橡胶", "SP": "纸浆", "SS": "不锈钢", 
+  "AO": "氧化铝", "BR": "丁二烯橡胶",
+  "M": "豆粕", "Y": "豆油", "A": "豆一", "B": "豆二", "P": "棕榈油", 
+  "C": "玉米", "CS": "玉米淀粉", "JD": "鸡蛋", "BB": "胶合板", "FB": "纤维板", 
+  "L": "塑料", "V": "PVC", "PP": "聚丙烯", "J": "焦炭", "JM": "焦煤", 
+  "I": "铁矿石", "EG": "乙二醇", "RR": "粳米", "EB": "苯乙烯", "PG": "液化石油气", 
+  "LH": "生猪",
+  "SR": "白糖", "CF": "棉花", "CY": "棉纱", "PM": "普麦", "WH": "强麦", 
+  "RI": "早缼稻", "LR": "晚缼稻", "JR": "粳稻", "RS": "油菜籽", "OI": "菜籽油", 
+  "RM": "菜籽粕", "SF": "硅铁", "SM": "锰硅", "TA": "PTA", "MA": "甲醇", 
+  "FG": "玻璃", "SA": "纯碱", "UR": "尿素", "AP": "苹果", "CJ": "红枣", 
+  "PK": "花生", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
+  "IF": "沪深300", "IC": "中证500", "IH": "上证50", "IM": "中证1000", 
+  "T": "10年期国债", "TF": "5年期国债", "TS": "2年期国债", "TL": "30年期国债",
+  "SC": "原油", "NR": "20号胶", "LU": "低硫燃料油", "BC": "国际铜", "EC": "欧线集运"
+};
+
+const getSymbolName = (symbol) => {
+  if (!symbol) return '';
+  if (symbolMap[symbol]) return symbolMap[symbol];
+  
+  // 匹配期货代码 (大写字母开头)
+  const match = symbol.match(/^([A-Z]+)/);
+  if (match) {
+      const code = match[1];
+      if (futuresMap[code]) return futuresMap[code];
+  }
+  
+  return symbol;
+};
+
+const periodMap = {
+  'daily': '日线',
+  '60': '60分钟',
+  '30': '30分钟',
+  '15': '15分钟',
+  '5': '5分钟'
+};
+
 const App = () => {
+
+
   const [loading, setLoading] = useState(false);
   const [symbols, setSymbols] = useState([]);
   const [results, setResults] = useState(null);
@@ -48,12 +232,17 @@ const App = () => {
   const [form] = Form.useForm();
   const [strategyCode, setStrategyCode] = useState('');
   const [savingCode, setSavingCode] = useState(false);
+  const [savedBacktests, setSavedBacktests] = useState([]);
+  const [viewingHistory, setViewingHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [currentParams, setCurrentParams] = useState(null);
   const [autoOptimize, setAutoOptimize] = useState(false);
 
   const [strategyType, setStrategyType] = useState('MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
   const [selectedMddInfo, setSelectedMddInfo] = useState(null);
   const [activeTab, setActiveTab] = useState('1');
+  const [filteredLogs, setFilteredLogs] = useState(null);
   
   // 缓存全量数据
   const [futuresList, setFuturesList] = useState([]);
@@ -168,9 +357,165 @@ const App = () => {
       }
   };
 
+  const fetchSavedBacktests = async () => {
+    setHistoryLoading(true);
+    try {
+      const response = await axios.get('http://localhost:8000/api/backtest/list');
+      setSavedBacktests(response.data);
+    } catch (error) {
+      message.error('获取回测记录失败: ' + error.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleSaveBacktest = async () => {
+    if (!results) return;
+    
+    // 辅助函数：安全转换数值，无效值返回 null
+    const safeNum = (val) => {
+        if (val === null || val === undefined || val === '') return null;
+        if (typeof val === 'string' && val.includes('%')) {
+            val = val.replace('%', '');
+        }
+        const num = Number(val);
+        return isNaN(num) ? null : num;
+    };
+
+    try {
+      const payload = {
+        symbol: form.getFieldValue('symbol'),
+        period: form.getFieldValue('period'),
+        strategy_name: strategyType,
+        strategy_params: currentParams || {},
+        initial_cash: safeNum(results.metrics.initial_cash),
+        final_value: safeNum(results.metrics.final_value),
+        net_profit: safeNum(results.metrics.net_profit),
+        return_rate: safeNum(results.metrics.return_rate),
+        sharpe_ratio: safeNum(results.metrics.sharpe_ratio),
+        max_drawdown: safeNum(results.metrics.max_drawdown),
+        total_trades: safeNum(results.metrics.total_trades),
+        win_rate: safeNum(results.metrics.win_rate),
+        detail_data: results
+      };
+      
+      await axios.post('http://localhost:8000/api/backtest/save', payload);
+      message.success('回测结果已保存');
+      fetchSavedBacktests();
+    } catch (error) {
+      message.error('保存失败: ' + error.message);
+    }
+  };
+
+  const handleViewHistory = async (id) => {
+    setHistoryLoading(true);
+    try {
+      const response = await axios.get(`http://localhost:8000/api/backtest/${id}`);
+      setViewingHistory(response.data);
+    } catch (error) {
+      message.error('获取详情失败: ' + error.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleDeleteBacktest = async (id) => {
+    try {
+      await axios.delete(`http://localhost:8000/api/backtest/${id}`);
+      message.success('删除成功');
+      fetchSavedBacktests();
+    } catch (error) {
+      message.error('删除失败: ' + error.message);
+    }
+  };
+
+  const parsedLogs = React.useMemo(() => {
+    if (!results || !results.logs) return [];
+    return results.logs.map((log, index) => parseLogItem(log, index));
+  }, [results]);
+
+  const downloadLogs = () => {
+    if (!viewingHistory || !viewingHistory.detail_data || !viewingHistory.detail_data.logs) {
+      message.warning('暂无日志可下载');
+      return;
+    }
+    
+    // Parse logs using shared helper
+    const logsToExport = viewingHistory.detail_data.logs.map((log, index) => parseLogItem(log, index));
+    
+    // Generate CSV content
+    const header = "时间,类型,内容,净利\n";
+    const rows = logsToExport.map(item => {
+        const typeMap = {
+            'buy': '买入',
+            'sell': '卖出',
+            'profit': '结算',
+            'signal': '信号',
+            'system': '系统',
+            'info': '信息'
+        };
+        const typeStr = typeMap[item.type] || '信息';
+        
+        return `${item.date},${typeStr},"${item.content.replace(/"/g, '""')}",${item.pnl !== null ? item.pnl : ''}`;
+    }).join('\n');
+    
+    const blobWithBOM = new Blob(['\uFEFF' + header + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blobWithBOM);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${getSymbolName(viewingHistory.symbol)}_${viewingHistory.strategy_name}_${viewingHistory.timestamp}_logs.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadCurrentLogs = () => {
+    // Determine data source (filtered or full)
+    const dataToExport = (filteredLogs && filteredLogs.length > 0) ? filteredLogs : parsedLogs;
+    
+    if (!dataToExport || dataToExport.length === 0) {
+      message.warning('暂无日志可下载');
+      return;
+    }
+    
+    // Generate CSV content
+    const header = "时间,类型,内容,净利\n";
+    const rows = dataToExport.map(item => {
+        const typeMap = {
+            'buy': '买入',
+            'sell': '卖出',
+            'profit': '结算',
+            'signal': '信号',
+            'system': '系统',
+            'info': '信息'
+        };
+        const typeStr = typeMap[item.type] || '信息';
+        
+        return `${item.date},${typeStr},"${item.content.replace(/"/g, '""')}",${item.pnl !== null ? item.pnl : ''}`;
+    }).join('\n');
+    
+    const blobWithBOM = new Blob(['\uFEFF' + header + rows], { type: 'text/csv;charset=utf-8;' });
+    
+    const url = URL.createObjectURL(blobWithBOM);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    const timestamp = dayjs().format('YYYYMMDD_HHmmss');
+    const strategy = strategyType || 'UnknownStrategy';
+    const symbol = form.getFieldValue('symbol') || 'UnknownSymbol';
+    link.download = `${strategy}_${getSymbolName(symbol)}_${timestamp}_logs.csv`;
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const onFinish = async (values) => {
     setLoading(true);
     setResults(null);
+    setFilteredLogs(null);
     try {
       // 转换数值类型
       let params = {};
@@ -311,6 +656,8 @@ const App = () => {
         strategy_name: strategyType
       };
 
+      setCurrentParams(params);
+
       if (values.date_range && values.date_range.length === 2) {
         payload.start_date = values.date_range[0].format('YYYY-MM-DD');
         payload.end_date = values.date_range[1].format('YYYY-MM-DD');
@@ -328,13 +675,13 @@ const App = () => {
   };
 
   // 图表配置
-  const getOption = () => {
-    if (!results) return {};
+  const getOption = (data = results, currentStrategyType = strategyType) => {
+    if (!data) return {};
 
     if (chartType === 'pie') {
         // 盈亏分布饼图
-        const won = results.metrics.won_trades || 0;
-        const lost = results.metrics.lost_trades || 0;
+        const won = data.metrics.won_trades || 0;
+        const lost = data.metrics.lost_trades || 0;
         
         return {
             title: { text: '交易盈亏分布', left: 'center', top: 20 },
@@ -375,19 +722,19 @@ const App = () => {
     }
 
     if (chartType === 'kline') {
-        const dates = results.kline_data?.dates || [];
-        const rawData = results.kline_data?.values || [];
-        const volumes = results.kline_data?.volumes || [];
-        const macdData = results.kline_data?.macd || { dif: [], dea: [], hist: [] };
-        const dkxData = results.kline_data?.dkx || { dkx: [], madkx: [] };
-        const maData = results.kline_data?.ma || {};
+        const dates = data.kline_data?.dates || [];
+        const rawData = data.kline_data?.values || [];
+        const volumes = data.kline_data?.volumes || [];
+        const macdData = data.kline_data?.macd || { dif: [], dea: [], hist: [] };
+        const dkxData = data.kline_data?.dkx || { dkx: [], madkx: [] };
+        const maData = data.kline_data?.ma || {};
         const ma5Series = (maData.ma5 && maData.ma5.length === rawData.length) ? maData.ma5 : calculateMA(5, rawData);
         const ma10Series = (maData.ma10 && maData.ma10.length === rawData.length) ? maData.ma10 : calculateMA(10, rawData);
         const ma20Series = (maData.ma20 && maData.ma20.length === rawData.length) ? maData.ma20 : calculateMA(20, rawData);
         const ma55Series = (maData.ma55 && maData.ma55.length === rawData.length) ? maData.ma55 : calculateMA(55, rawData);
-        const showDKX = strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy';
+        const showDKX = currentStrategyType === 'DKXStrategy' || currentStrategyType === 'DKXPartialTakeProfitStrategy';
 
-        const equityCurve = results.equity_curve || [];
+        const equityCurve = data.equity_curve || [];
         let equitySeries = [];
         if (equityCurve.length > 0) {
             const equityMap = {};
@@ -447,8 +794,8 @@ const App = () => {
                             fontWeight: 'bold'
                         }
                     },
-                    data: results.trades ? (() => {
-                        const tradeMarkers = results.trades.map(t => {
+                    data: Array.isArray(data.trades) ? (() => {
+                        const tradeMarkers = data.trades.map(t => {
                             // 根据 action 决定颜色和图标方向
                             const action = t.action || '';
                             let color = '#5470c6'; // 默认卖出颜色 (平多/卖空)
@@ -495,7 +842,7 @@ const App = () => {
                         });
 
                         const mddMarkers = [];
-                        results.trades.forEach(t => {
+                        data.trades.forEach(t => {
                             if (t.mdd_price !== null && t.mdd_price !== undefined && t.mdd_date) {
                                 mddMarkers.push({
                                     name: '最大回撤',
@@ -827,13 +1174,14 @@ const App = () => {
     }
 
     // 默认：权益曲线线形图
+    const equityCurve = Array.isArray(data.equity_curve) ? data.equity_curve : [];
     return {
       title: { text: '账户权益曲线' },
       tooltip: { trigger: 'axis' },
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
       xAxis: { 
         type: 'category', 
-        data: results.equity_curve.map(item => item.date) 
+        data: equityCurve.map(item => item ? item.date : '') 
       },
       yAxis: { 
         type: 'value', 
@@ -841,7 +1189,7 @@ const App = () => {
       },
       series: [{
         name: '权益',
-        data: results.equity_curve.map(item => item.value),
+        data: equityCurve.map(item => item ? item.value : 0),
         type: 'line',
         smooth: true,
         areaStyle: { opacity: 0.3 },
@@ -867,9 +1215,9 @@ const App = () => {
     return 'inherit';
   };
 
-  const getMetricsData = () => {
-    if (!results) return [];
-    const m = results.metrics;
+  const getMetricsData = (data = results) => {
+    if (!data || !data.metrics) return [];
+    const m = data.metrics;
     const fmt = (val) => val ? parseFloat(val).toFixed(2) : '0.00';
     const fmtPct = (val) => val ? `${parseFloat(val).toFixed(2)}%` : '0.00%';
 
@@ -914,11 +1262,17 @@ const App = () => {
                     defaultSelectedKeys={['1']}
                     style={{ height: '100%', borderRight: 0 }}
                     theme="dark"
-                    onSelect={({ key }) => setActiveTab(key)}
+                    onSelect={({ key }) => {
+                        setActiveTab(key);
+                        if (key === '4') {
+                            fetchSavedBacktests();
+                        }
+                    }}
                     items={[
                         { key: '1', icon: <LineChartOutlined />, label: '策略回测' },
                         { key: '2', icon: <CodeOutlined />, label: '代码编辑' },
-                        { key: '3', icon: <FileTextOutlined />, label: '交易日志' }
+                        { key: '3', icon: <FileTextOutlined />, label: '交易日志' },
+                        { key: '4', icon: <HistoryOutlined />, label: '回测记录' }
                     ]}
                 />
             </Sider>
@@ -1002,42 +1356,10 @@ const App = () => {
                             }}
                         </Form.Item>
 
-                        <Form.Item noStyle shouldUpdate={(prev, current) => prev.initial_cash !== current.initial_cash || prev.contract_multiplier !== current.contract_multiplier || prev.symbol !== current.symbol}>
-                            {({ getFieldValue }) => {
-                                if (!quoteInfo) return null;
-                                const currentMultiplier = getFieldValue('contract_multiplier') || 1;
-                                const initialCash = parseFloat(getFieldValue('initial_cash') || 0);
-                                const price = quoteInfo.price;
-                                const oneHandValue = price * currentMultiplier;
-                                // 默认15%保证金
-                                const marginRate = 0.15;
-                                const maxHands = oneHandValue > 0 ? Math.floor(initialCash / (oneHandValue * marginRate)) : 0;
-                                
-                                return (
-                                    <div style={{ background: '#fafafa', padding: '12px', borderRadius: '6px', marginBottom: '24px', border: '1px solid #f0f0f0' }}>
-                                        <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>合约详情参考 ({quoteInfo.date})</div>
-                                        <Row gutter={[8, 8]}>
-                                            <Col span={12}>
-                                                <div style={{ fontSize: '12px', color: '#666' }}>最新参考价</div>
-                                                <div style={{ fontWeight: 'bold' }}>{price}</div>
-                                            </Col>
-                                            <Col span={12}>
-                                                <div style={{ fontSize: '12px', color: '#666' }}>1点价值</div>
-                                                <div>{currentMultiplier} 元</div>
-                                            </Col>
-                                            <Col span={12}>
-                                                <div style={{ fontSize: '12px', color: '#666' }}>一手合约价值</div>
-                                                <div>{(oneHandValue / 10000).toFixed(2)} 万</div>
-                                            </Col>
-                                            <Col span={12}>
-                                                <div style={{ fontSize: '12px', color: '#666' }}>最大可开(15%保证金)</div>
-                                                <div style={{ color: '#1890ff', fontWeight: 'bold' }}>{maxHands} 手</div>
-                                            </Col>
-                                        </Row>
-                                    </div>
-                                );
-                            }}
-                        </Form.Item>
+                        <ContractInfo 
+                            form={form} 
+                            quoteInfo={quoteInfo} 
+                        />
 
                         <Form.Item label="选择策略">
                             <Select value={strategyType} onChange={(val) => {
@@ -1274,8 +1596,20 @@ const App = () => {
                              </Form.Item>
                         )}
 
-                        <Form.Item name="margin_rate" label="保证金率 (0.1=10%)" initialValue={0.1}>
+                        <Form.Item name="margin_rate" label="保证金率 (0.1=10%)" initialValue={0.12}>
                           <Input type="number" step="0.01" max={1} min={0.01} />
+                        </Form.Item>
+
+                        <Form.Item name="optimal_entry" label="开仓最优模式" valuePropName="checked" initialValue={false}>
+                             <div style={{ display: 'flex', alignItems: 'center' }}>
+                                  <Switch />
+                                  <Tooltip title="开启后，所有开仓、平仓、反手操作均以当前策略所选K线的中间点位 [(High+Low)/2] 作为执行价格（开启CheatOnOpen模式以确保成交）。">
+                                      <span style={{ marginLeft: 8, fontSize: '12px', color: '#888', cursor: 'pointer' }}>
+                                          <SafetyCertificateOutlined style={{ marginRight: 4 }} />
+                                          说明
+                                      </span>
+                                  </Tooltip>
+                             </div>
                         </Form.Item>
                         
                         {/* 隐藏字段，自动设置 */}
@@ -1308,6 +1642,13 @@ const App = () => {
                           >
                             开始回测
                           </Button>
+                        </Form.Item>
+                        <Form.Item>
+                             <Tooltip title="保存当前回测配置和结果">
+                                <Button icon={<SaveOutlined />} onClick={handleSaveBacktest} block size="large" disabled={!results}>
+                                    保存回测结果
+                                </Button>
+                             </Tooltip>
                         </Form.Item>
                         <Form.Item>
                              <Tooltip title="重新运行回测以刷新图表">
@@ -1350,7 +1691,7 @@ const App = () => {
                                     <Col span={4} key={item.key}>
                                         <Card 
                                             variant="borderless" 
-                                            bodyStyle={{ padding: '16px', background: item.bg, borderRadius: '8px', transition: 'all 0.3s' }}
+                                            styles={{ body: { padding: '16px', background: item.bg, borderRadius: '8px', transition: 'all 0.3s' } }}
                                             hoverable
                                             style={{ height: '100%' }}
                                         >
@@ -1394,8 +1735,8 @@ const App = () => {
                         >
                           <ReactECharts 
                             option={getOption()} 
-                            style={{ height: 800 }} 
-                            notMerge={false} 
+                            style={{ height: '800px', width: '100%' }} 
+                            notMerge={true} 
                             onEvents={{
                                 'click': onChartClick
                             }}
@@ -1471,7 +1812,7 @@ const App = () => {
                         }
                         variant="borderless"
                         style={{ height: '100%' }}
-                        bodyStyle={{ height: 'calc(100% - 60px)', padding: 0 }}
+                        styles={{ body: { height: 'calc(100% - 60px)', padding: 0 } }}
                     >
                         <Editor
                             height="100%"
@@ -1492,32 +1833,19 @@ const App = () => {
                     <div style={{ padding: '24px', height: '100%' }}>
                         <Card 
                             title={<span><FileTextOutlined /> 详细交易日志</span>} 
+                            extra={
+                                <Button type="primary" size="small" icon={<SaveOutlined />} onClick={downloadCurrentLogs}>
+                                    下载日志
+                                </Button>
+                            }
                             variant="borderless"
                             style={{ height: '100%', borderRadius: '8px' }}
-                            bodyStyle={{ height: 'calc(100% - 60px)', padding: '0' }}
+                            styles={{ body: { height: 'calc(100% - 60px)', padding: '0' } }}
                         >
-                            {results && results.logs ? (
+                            {parsedLogs && parsedLogs.length > 0 ? (
                                 <Table 
-                                    dataSource={results.logs.map((log, index) => {
-                                        const firstComma = log.indexOf(',');
-                                        const date = firstComma !== -1 ? log.substring(0, firstComma).trim() : '';
-                                        const content = firstComma !== -1 ? log.substring(firstComma + 1).trim() : log;
-                                        
-                                        let type = 'info';
-                                        if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
-                                        else if (content.includes('卖出') || content.includes('开空') || content.includes('做空') || content.includes('平仓')) type = 'sell';
-                                        else if (content.includes('交易利润')) type = 'profit';
-                                        else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
-                                        else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
-
-                                        let pnl = null;
-                                        if (type === 'profit') {
-                                            const match = content.match(/净利\s*([-\d.]+)/);
-                                            if (match) pnl = parseFloat(match[1]);
-                                        }
-
-                                        return { key: index, date, content, type, pnl };
-                                    })}
+                                    dataSource={parsedLogs}
+                                    onChange={(pagination, filters, sorter, extra) => setFilteredLogs(extra.currentDataSource)}
                                     columns={[
                                         { 
                                             title: '时间', 
@@ -1562,7 +1890,7 @@ const App = () => {
                                             dataIndex: 'pnl', 
                                             width: 120,
                                             sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
-                                            render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toFixed(2)}</span> : '-' 
+                                            render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : '-' 
                                         }
                                     ]}
                                     pagination={{ pageSize: 50, showSizeChanger: true }}
@@ -1573,6 +1901,308 @@ const App = () => {
                                 />
                             ) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据，请先运行回测</div>}
                         </Card>
+                    </div>
+                </div>
+
+                <div style={{ display: activeTab === '4' ? 'block' : 'none', height: '100%', overflowY: 'auto' }}>
+                    <div style={{ padding: '24px', height: '100%' }}>
+                        {viewingHistory ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                                    <Button onClick={() => setViewingHistory(null)} icon={<ArrowLeftOutlined />}>返回列表</Button>
+                                    <h2 style={{ color: '#fff', margin: 0 }}>
+                                        {strategyNameMap[viewingHistory.strategy_name] || viewingHistory.strategy_name} - {getSymbolName(viewingHistory.symbol)} ({viewingHistory.period})
+                                    </h2>
+                                </div>
+                                
+                                {viewingHistory.strategy_params && (
+                                    <Card variant="borderless" style={{ borderRadius: '8px' }} styles={{ body: { padding: '12px 24px' } }}>
+                                        <Descriptions title="策略参数" size="small" column={4}>
+                                            {Object.entries(viewingHistory.strategy_params).map(([key, value]) => (
+                                                <Descriptions.Item key={key} label={key}>{String(value)}</Descriptions.Item>
+                                            ))}
+                                        </Descriptions>
+                                    </Card>
+                                )}
+                                
+                                <Row gutter={[16, 16]}>
+                                    {getMetricsData({ ...viewingHistory.detail_data, metrics: viewingHistory.metrics || (viewingHistory.detail_data && viewingHistory.detail_data.metrics) }).map(item => (
+                                        <Col span={4} key={item.key}>
+                                            <Card variant="borderless" style={{ background: item.bg, borderRadius: '8px' }}>
+                                                <Statistic
+                                                    title={
+                                                        <span style={{ fontSize: '14px', color: '#666', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            {item.icon} {item.metric}
+                                                        </span>
+                                                    }
+                                                    value={item.value}
+                                                    valueStyle={{ color: item.color, fontSize: '20px', fontWeight: 'bold' }}
+                                                />
+                                            </Card>
+                                        </Col>
+                                    ))}
+                                </Row>
+
+                                <Card 
+                                    title={
+                                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                                            <LineChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
+                                            {chartType === 'line' ? "账户权益曲线" : 
+                                             chartType === 'kline' ? "K线图 & 交易信号" :
+                                             "盈亏分布分析"}
+                                        </div>
+                                    }
+                                    variant="borderless" 
+                                    style={{ marginTop: '24px', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
+                                    extra={
+                                        <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)} buttonStyle="solid">
+                                            <Radio.Button value="line"><LineChartOutlined /> 趋势图</Radio.Button>
+                                            <Radio.Button value="kline"><ThunderboltOutlined /> K线图</Radio.Button>
+                                            <Radio.Button value="pie"><PercentageOutlined /> 饼状图</Radio.Button>
+                                        </Radio.Group>
+                                    }
+                                >
+                                    <div style={{ height: '600px' }}>
+                                         <ReactECharts 
+                                            option={getOption({ ...viewingHistory.detail_data, metrics: viewingHistory.metrics || (viewingHistory.detail_data && viewingHistory.detail_data.metrics) }, viewingHistory.strategy_name)} 
+                                            style={{ height: '100%', width: '100%' }} 
+                                            notMerge={true}
+                                            onEvents={{ click: onChartClick }}
+                                         />
+                                    </div>
+                                </Card>
+
+                                <Card 
+                                    title={<span><FileTextOutlined /> 详细交易日志</span>} 
+                                    variant="borderless"
+                                    style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
+                                    extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={downloadLogs}>下载日志</Button>}
+                                >
+                                    {viewingHistory.detail_data && Array.isArray(viewingHistory.detail_data.logs) ? (
+                                        <Table 
+                                            dataSource={viewingHistory.detail_data.logs.map((logItem, index) => parseLogItem(logItem, index))}
+                                            columns={[
+                                                { 
+                                                    title: '时间', 
+                                                    dataIndex: 'date', 
+                                                    width: 180,
+                                                    sorter: (a, b) => new Date(a.date) - new Date(b.date),
+                                                    defaultSortOrder: 'ascend'
+                                                },
+                                                { 
+                                                    title: '类型', 
+                                                    dataIndex: 'type', 
+                                                    width: 100,
+                                                    filters: [
+                                                        { text: '买入', value: 'buy' },
+                                                        { text: '卖出', value: 'sell' },
+                                                        { text: '结算', value: 'profit' },
+                                                        { text: '信号', value: 'signal' },
+                                                        { text: '系统', value: 'system' },
+                                                        { text: '信息', value: 'info' }
+                                                    ],
+                                                    onFilter: (value, record) => record.type === value,
+                                                    render: (type) => {
+                                                        const config = {
+                                                            'buy': { color: '#f50', text: '买入' },
+                                                            'sell': { color: '#87d068', text: '卖出' },
+                                                            'profit': { color: 'gold', text: '结算' },
+                                                            'signal': { color: 'blue', text: '信号' },
+                                                            'system': { color: 'default', text: '系统' },
+                                                            'info': { color: 'default', text: '信息' }
+                                                        };
+                                                        const c = config[type] || config['info'];
+                                                        return <Tag color={c.color}>{c.text}</Tag>;
+                                                    }
+                                                },
+                                                { 
+                                                    title: '内容', 
+                                                    dataIndex: 'content',
+                                                    render: (text) => <span style={{ fontFamily: 'monospace' }}>{text}</span>
+                                                },
+                                                { 
+                                                    title: '净利', 
+                                                    dataIndex: 'pnl', 
+                                                    width: 120,
+                                                    sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
+                                                    render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : '-' 
+                                                }
+                                            ]}
+                                            pagination={{ pageSize: 50, showSizeChanger: true }}
+                                            scroll={{ y: 500 }}
+                                            size="small"
+                                            rowKey="key"
+                                            bordered
+                                        />
+                                    ) : <div style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>暂无日志数据</div>}
+                                </Card>
+                            </div>
+                        ) : (
+                            <Card 
+                                title={<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><HistoryOutlined style={{ color: '#1890ff', fontSize: '20px' }} /> <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#333' }}>回测历史记录</span></div>} 
+                                bordered={false}
+                                style={{ background: '#fff', height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }} 
+                                headStyle={{ borderBottom: '1px solid #f0f0f0', padding: '0 24px' }}
+                                styles={{ body: { padding: '0', height: 'calc(100% - 57px)', position: 'relative' } }}
+                                extra={<Button type="primary" ghost icon={<ReloadOutlined />} onClick={fetchSavedBacktests}>刷新列表</Button>}
+                            >
+                                <Table 
+                                    dataSource={savedBacktests} 
+                                    rowKey="id"
+                                    loading={historyLoading} 
+                                    size="middle"
+                                    columns={[
+                                        { title: 'ID', dataIndex: 'id', key: 'id', width: 60, align: 'center', sorter: (a, b) => a.id - b.id, defaultSortOrder: 'descend' },
+                                        { 
+                                            title: '策略名称', 
+                                            dataIndex: 'strategy_name', 
+                                            key: 'strategy_name',
+                                            width: 180,
+                                            render: (text) => <span style={{ fontWeight: 500, color: '#1890ff' }}>{strategyNameMap[text] || text}</span>
+                                        },
+                                        { 
+                                            title: '交易品种', 
+                                            dataIndex: 'symbol', 
+                                            key: 'symbol', 
+                                            width: 140,
+                                            align: 'center',
+                                            render: (text) => <Tag color="geekblue" style={{ margin: 0, minWidth: '60px', textAlign: 'center' }}>{getSymbolName(text)}</Tag>
+                                        },
+                                        { 
+                                            title: '周期', 
+                                            dataIndex: 'period', 
+                                            key: 'period', 
+                                            width: 80,
+                                            align: 'center',
+                                            render: (text) => <Tag color={text === 'daily' ? 'purple' : 'cyan'}>{periodMap[text] || text}</Tag>
+                                        },
+                                        { 
+                                            title: '最终权益', 
+                                            dataIndex: 'final_value', 
+                                            key: 'final_value',
+                                            align: 'right',
+                                            sorter: (a, b) => a.final_value - b.final_value,
+                                            render: (val) => val ? <span style={{ fontWeight: 'bold', fontFamily: 'Consolas, Monaco, monospace' }}>{val.toFixed(2)}</span> : '-' 
+                                        },
+                                        { 
+                                            title: '净利润', 
+                                            dataIndex: 'net_profit', 
+                                            key: 'net_profit',
+                                            align: 'right',
+                                            sorter: (a, b) => a.net_profit - b.net_profit,
+                                            render: (val) => {
+                                                if (val === null || val === undefined) return '-';
+                                                const color = val >= 0 ? '#f5222d' : '#52c41a'; 
+                                                const icon = val >= 0 ? <RiseOutlined /> : <FallOutlined />;
+                                                return <span style={{ color, fontWeight: 'bold', fontFamily: 'Consolas, Monaco, monospace' }}>{icon} {val.toFixed(2)}</span>;
+                                            } 
+                                        },
+                                        { 
+                                            title: '收益率', 
+                                            dataIndex: 'return_rate', 
+                                            key: 'return_rate',
+                                            align: 'right',
+                                            sorter: (a, b) => a.return_rate - b.return_rate,
+                                            render: (val, record) => {
+                                                // 兼容逻辑：如果return_rate为空，尝试通过net_profit计算
+                                                let displayVal = val;
+                                                if (displayVal === null || displayVal === undefined) {
+                                                    if (record.net_profit !== null && record.final_value !== null) {
+                                                        const initial = record.final_value - record.net_profit;
+                                                        if (initial !== 0) {
+                                                            displayVal = record.net_profit / initial;
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                if (displayVal === null || displayVal === undefined) return '-';
+                                                
+                                                const color = displayVal >= 0 ? '#f5222d' : '#52c41a';
+                                                return <span style={{ color, fontWeight: 'bold' }}>{(displayVal * 100).toFixed(2)}%</span>;
+                                            }
+                                        },
+                                        { 
+                                            title: '胜率', 
+                                            dataIndex: 'win_rate', 
+                                            key: 'win_rate',
+                                            width: 120,
+                                            sorter: (a, b) => a.win_rate - b.win_rate,
+                                            render: (val) => {
+                                                if (val === null || val === undefined) return '-';
+                                                // 兼容逻辑：如果大于1，认为是百分比值，否则认为是比例
+                                                const percent = val > 1 ? val : val * 100;
+                                                return <Progress percent={percent.toFixed(1)} size="small" status={percent > 50 ? 'exception' : 'success'} strokeColor={percent > 50 ? '#f5222d' : '#52c41a'} format={percent => <span style={{ color: '#666' }}>{percent}%</span>} />;
+                                            }
+                                        },
+                                        { 
+                                            title: '最大回撤', 
+                                            dataIndex: 'max_drawdown', 
+                                            key: 'max_drawdown',
+                                            align: 'right',
+                                            sorter: (a, b) => a.max_drawdown - b.max_drawdown,
+                                            render: (val) => {
+                                                if (!val) return '-';
+                                                // 兼容逻辑：如果大于1，认为是百分比值，否则认为是比例
+                                                const percent = val > 1 ? val : val * 100;
+                                                return <span style={{ color: '#faad14' }}>{percent.toFixed(2)}%</span>;
+                                            }
+                                        },
+                                        { title: '交易次数', dataIndex: 'total_trades', key: 'total_trades', align: 'center', sorter: (a, b) => a.total_trades - b.total_trades },
+                                        { 
+                                            title: '保存时间', 
+                                            dataIndex: 'timestamp', 
+                                            key: 'timestamp', 
+                                            width: 160,
+                                            align: 'center',
+                                            sorter: (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
+                                            render: (val) => <span style={{ fontSize: '12px', color: '#999' }}>{new Date(val).toLocaleString()}</span> 
+                                        },
+                                        {
+                                            title: '操作',
+                                            key: 'action',
+                                            align: 'center',
+                                            fixed: 'right',
+                                            width: 140,
+                                            render: (_, record) => (
+                                                <Space size="small">
+                                                    <Button type="primary" size="small" ghost onClick={() => handleViewHistory(record.id)}>查看详情</Button>
+                                                    <Popconfirm
+                                                        title="删除记录"
+                                                        description="确定要删除这条回测记录吗？"
+                                                        onConfirm={() => handleDeleteBacktest(record.id)}
+                                                        okText="确定"
+                                                        cancelText="取消"
+                                                    >
+                                                        <Button type="primary" size="small" danger icon={<DeleteOutlined />} />
+                                                    </Popconfirm>
+                                                </Space>
+                                            )
+                                        }
+                                    ]}
+                                    pagination={{ 
+                                        pageSize: 20, 
+                                        showTotal: (total) => `共 ${total} 条记录`,
+                                        showQuickJumper: true,
+                                        showSizeChanger: true,
+                                        position: ['bottomRight'],
+                                        style: {
+                                            position: 'absolute',
+                                            bottom: 0,
+                                            right: 0,
+                                            width: '100%',
+                                            padding: '12px 24px',
+                                            margin: 0,
+                                            borderTop: '1px solid #f0f0f0',
+                                            background: '#fff',
+                                            display: 'flex',
+                                            justifyContent: 'flex-end',
+                                            zIndex: 10
+                                        }
+                                    }}
+                                    scroll={{ x: 1300, y: 'calc(100vh - 240px)' }}
+                                />
+                            </Card>
+                        )}
                     </div>
                 </div>
             </Content>

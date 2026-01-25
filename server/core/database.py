@@ -22,6 +22,7 @@ class BacktestRecord(Base):
     timestamp = Column(DateTime, default=datetime.datetime.now)
     symbol = Column(String, index=True)
     period = Column(String)
+    strategy_name = Column(String, default="TrendFollowingStrategy")
     
     # 策略参数 (JSON 存储)
     strategy_params = Column(JSON)
@@ -39,9 +40,8 @@ class BacktestRecord(Base):
     # 标记是否为自动优化的结果
     is_optimized = Column(Integer, default=0) # 0: 原始, 1: 优化后
 
-    # 完整的回测结果数据 (JSON，包括权益曲线等，量大可考虑分表，这里为了简单直接存)
-    # 考虑到 SQLite 性能和单条记录大小，如果曲线太长可能需要压缩，暂且直接存
-    # equity_curve = Column(JSON) 
+    # 完整的回测结果数据
+    detail_data = Column(JSON) 
 
 def init_db():
     Base.metadata.create_all(bind=engine)

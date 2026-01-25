@@ -47,7 +47,9 @@ class BacktestEngine:
                 self.max_capital_usage = 0.0
                 self.max_profit_points = 0.0
                 self.max_loss_points = 0.0
-                self.max_profit_per_hand_val = 0.0 # 用于计算一手盈利百分数 (基于最大盈利的那笔交易)
+                self.max_pos_size = 0.0 # 记录最大持仓手数
+                self.accum_profit_per_hand = 0.0 # 累计每手净利润
+                self.accum_profit_pct = 0.0 # 累计每手盈利百分比
                 
                 # 辅助记录最大最小PNL
                 self.max_trade_pnl = -float('inf')
@@ -67,7 +69,9 @@ class BacktestEngine:
                 self.max_capital_usage = 0.0
                 self.max_profit_points = 0.0
                 self.max_loss_points = 0.0
-                self.max_profit_per_hand_val = 0.0
+                self.max_pos_size = 0.0
+                self.accum_profit_per_hand = 0.0
+                self.accum_profit_pct = 0.0
                 
                 self.max_trade_pnl = -float('inf')
                 self.min_trade_pnl = float('inf')
@@ -86,21 +90,26 @@ class BacktestEngine:
                 if trade.isclosed:
                     # 计算点数
                     multiplier = getattr(self.p, 'contract_multiplier', 1)
-                    margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                    # margin_rate = getattr(self.p, 'margin_rate', 0.1) # Unused
                     size = abs(trade.size)
                     pnl = trade.pnlcomm
                     
                     if size > 0 and multiplier > 0:
                         points = pnl / (size * multiplier)
                         
-                        # 记录最大盈利交易的点数和每手盈利金额
+                        # 累计每手净利润
+                        self.accum_profit_per_hand += pnl / size
+                        
+                        # 累计盈利百分比 (基于开仓价)
+                        # trade.price 是开仓均价
+                        if trade.price > 0:
+                            trade_pct = points / trade.price
+                            self.accum_profit_pct += trade_pct
+                        
+                        # 记录最大盈利交易的点数
                         if pnl > self.max_trade_pnl:
                             self.max_trade_pnl = pnl
                             self.max_profit_points = points
-                            
-                            # 记录该笔交易的每手盈利金额 (Total PnL / Size)
-                            # 用于后续计算: 一手盈利百分数 = 每手盈利金额 / 最新参考价
-                            self.max_profit_per_hand_val = pnl / size
                         
                         # 记录最亏交易的点数
                         if pnl < self.min_trade_pnl:
@@ -111,11 +120,22 @@ class BacktestEngine:
 
             def next(self):
                 # 记录最大资金使用率
+                # 由于 broker.setcommission 设置了 margin=0，getcash() 不会扣除保证金
+                # 因此需要手动计算理论保证金占用
                 val = self.broker.getvalue()
-                cash = self.broker.getcash()
                 if val > 0:
-                    usage = (val - cash) / val
+                    margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                    multiplier = getattr(self.p, 'contract_multiplier', 1)
+                    # 使用收盘价估算市值
+                    price = self.datas[0].close[0]
+                    size = abs(self.position.size)
+                    
+                    margin_used = size * price * multiplier * margin_rate
+                    usage = margin_used / val
                     self.max_capital_usage = max(self.max_capital_usage, usage)
+
+                # 记录最大持仓
+                self.max_pos_size = max(self.max_pos_size, abs(self.position.size))
 
                 # 记录最大回撤点位 (在 super().next() 之前或之后均可，这里选择之前以捕获当前bar)
                 # 注意：Backtrader 的 next 在 bar 关闭时调用，所以 datas[0] 是当前结束的 bar
@@ -287,6 +307,12 @@ class BacktestEngine:
 
         cerebro = bt.Cerebro()
         
+        # 检查是否开启“开仓最优模式” (Optimal Entry)
+        # 如果开启，启用 cheat_on_open 以便能在当前 K 线上以 Limit 价格成交
+        if strategy_params.get('optimal_entry'):
+            cerebro.broker.set_coo(True)
+            print("DEBUG: Optimal Entry Mode Enabled (Cheat On Open = True)")
+        
         # 1. 加载数据
         data_warning = None
         try:
@@ -444,33 +470,28 @@ class BacktestEngine:
         max_capital_usage = getattr(strat, 'max_capital_usage', 0.0)
         max_profit_points = getattr(strat, 'max_profit_points', 0.0)
         max_loss_points = getattr(strat, 'max_loss_points', 0.0)
-        max_profit_per_hand_val = getattr(strat, 'max_profit_per_hand_val', 0.0)
         
         # 使用手数
-        used_size = '动态'
-        fixed_size = 1
-        size_mode = strategy_params.get('size_mode')
-        if size_mode == 'fixed' or not size_mode: # Default to fixed if not present
-            try:
-                fixed_size = int(strategy_params.get('fixed_size', 20)) # Default 20
-                used_size = fixed_size
-            except:
-                used_size = '未知'
+        actual_max_size = getattr(strat, 'max_pos_size', 0)
+        used_size = actual_max_size if actual_max_size > 0 else '动态'
+        
+        # 如果没有实际交易或 size 为 0，回退到参数
+        if used_size == '动态' or used_size == 0:
+            size_mode = strategy_params.get('size_mode')
+            if size_mode == 'fixed' or not size_mode: # Default to fixed if not present
+                try:
+                    fixed_size = int(strategy_params.get('fixed_size', 20)) # Default 20
+                    used_size = fixed_size
+                except:
+                    used_size = '未知'
         
         # 一手最终赚钱数 (每手净利润)
-        one_hand_net_profit = 0.0
-        if isinstance(used_size, (int, float)) and used_size > 0:
-            one_hand_net_profit = pnl_net / used_size
+        # 使用累计的 (PnL/Size) 之和，这样即使 size 变化也能正确反映"单位手"的盈利能力
+        one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
             
-        # 一手盈利百分数 (每手盈利金额 / 最新参考价 * 100)
-        # 获取最新参考价 (使用 df_raw 中的 Close)
-        latest_price = 1.0
-        if df_raw is not None and not df_raw.empty:
-            latest_price = df_raw['Close'].iloc[-1]
-            
-        one_hand_profit_pct = 0.0
-        if latest_price > 0:
-            one_hand_profit_pct = (one_hand_net_profit / latest_price) * 100.0
+        # 一手盈利百分数 (每手盈利金额 / 开仓价 * 100)
+        # 使用累计的 (PnL / (Size * Price)) 之和
+        one_hand_profit_pct = getattr(strat, 'accum_profit_pct', 0.0) * 100.0
 
         # 准备 K 线数据
         # 确保索引是 datetime
