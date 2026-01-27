@@ -177,6 +177,42 @@ class TrendFollowingStrategy(BaseStrategy):
             self.log(f'死叉 (快线 {self.ma_fast[0]:.2f} < 慢线 {self.ma_slow[0]:.2f})')
             self.order = self.order_target_size(target=-self.params.fixed_size)
 
+class MA5MA20CrossoverStrategy(BaseStrategy):
+    """
+    5/20双均线交叉策略
+    逻辑：
+    1. MA5上穿MA20 (金叉) -> 做多
+    2. MA5下穿MA20 (死叉) -> 做空
+    3. 始终持有仓位，反手操作
+    """
+    params = (
+        ('fast_period', 5),
+        ('slow_period', 20),
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.ma_fast = bt.ind.SMA(period=self.params.fast_period)
+        self.ma_slow = bt.ind.SMA(period=self.params.slow_period)
+        self.crossover = bt.ind.CrossOver(self.ma_fast, self.ma_slow)
+
+    def next(self):
+        if not self.pre_next():
+            return
+
+        if self.order:
+            return
+
+        # 金叉做多
+        if self.crossover > 0:
+            self.log(f'金叉信号: 做多 (MA{self.params.fast_period}={self.ma_fast[0]:.2f} > MA{self.params.slow_period}={self.ma_slow[0]:.2f})')
+            self.order = self.order_target_size(target=self.params.fixed_size)
+            
+        # 死叉做空
+        elif self.crossover < 0:
+            self.log(f'死叉信号: 做空 (MA{self.params.fast_period}={self.ma_fast[0]:.2f} < MA{self.params.slow_period}={self.ma_slow[0]:.2f})')
+            self.order = self.order_target_size(target=-self.params.fixed_size)
+
 class MA20MA55CrossoverStrategy(BaseStrategy):
     """
     20/55双均线交叉策略 (多空)
