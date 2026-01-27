@@ -72,6 +72,8 @@ class BacktestEngine:
                 self.max_pos_size = 0.0
                 self.accum_profit_per_hand = 0.0
                 self.accum_profit_pct = 0.0
+                self.sum_entry_price = 0.0
+                self.closed_trade_count = 0
                 
                 self.max_trade_pnl = -float('inf')
                 self.min_trade_pnl = float('inf')
@@ -91,9 +93,31 @@ class BacktestEngine:
                     # 计算点数
                     multiplier = getattr(self.p, 'contract_multiplier', 1)
                     # margin_rate = getattr(self.p, 'margin_rate', 0.1) # Unused
-                    size = abs(trade.size)
-                    pnl = trade.pnlcomm
                     
+                    size = abs(trade.size)
+                    if size == 0:
+                        # Try to recover size from history
+                        if hasattr(trade, 'history') and len(trade.history) > 0:
+                            max_size = 0
+                            curr_size = 0
+                            for ev in trade.history:
+                                # trade.history contains TradeHistory objects (dict-like)
+                                # Structure: {'status': {...}, 'event': {'size': ..., ...}}
+                                if 'event' in ev and 'size' in ev['event']:
+                                    ev_size = ev['event']['size']
+                                    curr_size += ev_size
+                                    if abs(curr_size) > max_size:
+                                        max_size = abs(curr_size)
+                            size = max_size
+                        
+                        # Fallback to fixed_size if history recovery failed
+                        if size == 0:
+                            size_mode = getattr(self.params, 'size_mode', 'fixed')
+                            if size_mode == 'fixed' or not size_mode:
+                                size = int(getattr(self.params, 'fixed_size', 1))
+                    
+                    pnl = trade.pnlcomm
+
                     if size > 0 and multiplier > 0:
                         points = pnl / (size * multiplier)
                         
@@ -101,10 +125,17 @@ class BacktestEngine:
                         self.accum_profit_per_hand += pnl / size
                         
                         # 累计盈利百分比 (基于开仓价)
-                        # trade.price 是开仓均价
+                        # 用户定义逻辑：(总每手净利润 / 平均开仓价格)
+                        # 这里只更新 sum_entry_price，最终百分比在 stop() 或 run() 结束时计算
+                        # 但为了实时更新 metrics，我们在这里计算当前状态
                         if trade.price > 0:
-                            trade_pct = points / trade.price
-                            self.accum_profit_pct += trade_pct
+                            self.sum_entry_price += trade.price
+                            self.closed_trade_count += 1
+                            
+                            # Calculate Aggregate Percentage
+                            avg_entry_price = self.sum_entry_price / self.closed_trade_count
+                            if avg_entry_price > 0:
+                                self.accum_profit_pct = (self.accum_profit_per_hand / avg_entry_price)
                         
                         # 记录最大盈利交易的点数
                         if pnl > self.max_trade_pnl:
@@ -176,6 +207,9 @@ class BacktestEngine:
                 print(log_entry)
 
             def notify_order(self, order):
+                if order.status in [order.Submitted, order.Accepted]:
+                    return
+
                 if not hasattr(self, 'trades_history'):
                     self.trades_history = []
                     
@@ -287,6 +321,56 @@ class BacktestEngine:
                         "entry_price": final_entry_price, # 对应的开仓均价
                         "holding_direction": holding_direction # 对应的持仓方向
                     })
+
+                    # --- Sync Log with History ---
+                    comm = order.executed.comm
+                    final_entry_price_val = final_entry_price if final_entry_price is not None else 0.0
+                    mdd_str = f", 期间最大回撤: {final_mdd_price:.2f}" if final_mdd_price is not None else ""
+                    
+                    # PnL (Net Profit with commission)
+                    # pnl is gross, comm is commission. Only show for closing trades (pnl != 0)
+                    raw_pnl = order.executed.pnl
+                    pnl_val = raw_pnl - order.executed.comm
+                    pnl_str = ""
+                    if raw_pnl != 0:
+                        pnl_str = f", 净利润: {pnl_val:.2f}"
+                        # Calculate Profit Percentage
+                        # User Logic: (NetProfitPerHand / EntryPrice)
+                        try:
+                            exec_size = abs(order.executed.size)
+                            multiplier = getattr(self.p, 'contract_multiplier', 1)
+                            
+                            # 1. Infer Entry Price using Gross PnL (raw_pnl)
+                            # Long (Sell to Close): Entry = Exit - (GrossPnL / (Size * Mult))
+                            # Short (Buy to Close): Entry = Exit + (GrossPnL / (Size * Mult))
+                            
+                            profit_per_hand_gross = raw_pnl / exec_size
+                            price_diff = profit_per_hand_gross / multiplier
+                            
+                            implied_entry = 0.0
+                            if order.executed.size < 0: # Sell to Close (Long)
+                                implied_entry = order.executed.price - price_diff
+                            else: # Buy to Close (Short)
+                                implied_entry = order.executed.price + price_diff
+                                
+                            if implied_entry > 0:
+                                # 2. Calculate Pct using Net PnL (pnl_val)
+                                profit_per_hand_net = pnl_val / exec_size
+                                pct = (profit_per_hand_net / implied_entry)
+                                pnl_str += f", 收益率: {pct:.2f}%"
+                        except Exception:
+                            pass
+
+                    log_msg = (f"交易执行: 【{action_type}】 "
+                               f"价格: {price:.2f}, 数量: {float(size)}, 费用: {comm:.2f}, "
+                               f"当前持仓: {float(current_pos)}, 持仓成本: {final_entry_price_val:.2f}, "
+                               f"方向: {holding_direction}{mdd_str}{pnl_str}")
+                    self.log(log_msg)
+                    
+                    if order.isbuy():
+                        self.buyprice = order.executed.price
+                        self.buycomm = order.executed.comm
+                    self.bar_executed = len(self)
                     
                     # 状态重置逻辑
                     if current_pos == 0:
@@ -303,7 +387,10 @@ class BacktestEngine:
                     # 上面的逻辑保证了平仓或反手时清除。
                     # 如果是单纯开仓 (0 -> size)，mdd 为 None，这是合理的，因为刚开仓还没有"过程"。
                 
-                super().notify_order(order)
+                elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+                    self.log('订单已取消/保证金不足/被拒绝')
+
+                self.order = None
 
         cerebro = bt.Cerebro()
         
@@ -335,6 +422,7 @@ class BacktestEngine:
             # 将 start_date 注入到策略参数中，用于严格控制交易开始时间
             # 这样策略在 fetch_start_date 开始运行计算指标，但在 start_date 之前不进行交易
             strategy_params['start_date'] = start_date
+            strategy_params['end_date'] = end_date # 注入结束日期，用于强制平仓
 
             df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source)
             
@@ -489,7 +577,7 @@ class BacktestEngine:
         # 使用累计的 (PnL/Size) 之和，这样即使 size 变化也能正确反映"单位手"的盈利能力
         one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
             
-        # 一手盈利百分数 (每手盈利金额 / 开仓价 * 100)
+        # 一手盈利百分数 (每手盈利金额 / 开仓价)
         # 使用累计的 (PnL / (Size * Price)) 之和
         one_hand_profit_pct = getattr(strat, 'accum_profit_pct', 0.0) * 100.0
 

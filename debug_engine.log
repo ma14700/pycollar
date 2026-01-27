@@ -1,0 +1,297 @@
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -8410.68, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -11410.69, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -12610.686, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.7, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 4789.228, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -10810.824, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -27010.77, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -45610.832, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -35410.866, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -21610.82, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34210.778, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.72, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.72, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -18010.724, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -6010.764, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -31810.85, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -63610.744, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 48589.63, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34210.094, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -50410.148, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -48610.154, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 6590.03, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 38989.922, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -85810.494, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 84588.938, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -38411.472, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -6011.58, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 184789.056, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -21010.258, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 50989.982, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -24609.766, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -18609.746, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 64189.978, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -10210.27, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -22810.228, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 158990.378, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -37808.966, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34208.954, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -31208.964, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 161991.68, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -8410.68, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -11410.69, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -12610.686, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.7, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 4789.228, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -10810.824, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -27010.77, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -45610.832, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -35410.866, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -21610.82, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34210.778, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.72, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16810.72, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -18010.724, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -6010.764, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -31810.85, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -63610.744, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 48589.63, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34210.094, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -50410.148, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -48610.154, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 6590.03, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 38989.922, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -85810.494, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 84588.938, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -38411.472, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -6011.58, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 184789.056, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -21010.258, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 50989.982, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -24609.766, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -18609.746, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 64189.978, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -10210.27, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -22810.228, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 158990.378, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -37808.966, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -34208.954, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -31208.964, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 161991.68, Size: 0, Mult: 30
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -78.6598, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -18.6658, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 40.3401, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -19.6539, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 181.3662, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16.614, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 70.3947, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 242.3775, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -16.6484, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 9.349, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: 91.3572, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -80.6256, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -49.6225, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -99.6175, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -27.6103, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -25.610500000000002, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -90.617, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -14.624600000000001, Size: 0, Mult: 1
+DEBUG: notify_trade called. isclosed=False
+DEBUG: notify_trade called. isclosed=True
+DEBUG: notify_trade closed. PnL: -32.6264, Size: 0, Mult: 1

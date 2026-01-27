@@ -144,26 +144,63 @@ const HistoryPage = () => {
                         <Table 
                             dataSource={viewingHistory.detail_data.logs.map((logItem, index) => parseLogItem(logItem, index))}
                             columns={[
-                                { title: '时间', dataIndex: 'date', width: 180, sorter: (a, b) => new Date(a.date) - new Date(b.date), defaultSortOrder: 'ascend' },
                                 { 
-                                    title: '类型', dataIndex: 'type', width: 100,
+                                    title: '时间', 
+                                    dataIndex: 'date', 
+                                    width: 160, 
+                                    fixed: 'left',
+                                    sorter: (a, b) => new Date(a.date) - new Date(b.date), 
+                                    defaultSortOrder: 'ascend' 
+                                },
+                                { 
+                                    title: '类型', 
+                                    dataIndex: 'type', 
+                                    width: 90,
+                                    fixed: 'left',
                                     filters: [
                                         { text: '买入', value: 'buy' }, { text: '卖出', value: 'sell' },
                                         { text: '结算', value: 'profit' }, { text: '信号', value: 'signal' },
                                         { text: '系统', value: 'system' }, { text: '信息', value: 'info' }
                                     ],
                                     onFilter: (value, record) => record.type === value,
-                                    render: (type) => {
+                                    render: (type, record) => {
                                         const config = { 'buy': { color: '#f50', text: '买入' }, 'sell': { color: '#87d068', text: '卖出' }, 'profit': { color: 'gold', text: '结算' }, 'signal': { color: 'blue', text: '信号' }, 'system': { color: 'default', text: '系统' }, 'info': { color: 'default', text: '信息' } };
                                         const c = config[type] || config['info'];
-                                        return <Tag color={c.color}>{c.text}</Tag>;
+                                        const label = (['buy', 'sell', 'profit'].includes(type) && record.action) ? record.action : c.text;
+                                        return <Tag color={c.color}>{label}</Tag>;
                                     }
                                 },
-                                { title: '内容', dataIndex: 'content', render: (text) => <span style={{ fontFamily: 'monospace' }}>{text}</span> },
-                                { title: '净利', dataIndex: 'pnl', width: 120, sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0), render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : '-' }
+                                { title: '价格', dataIndex: 'price', width: 100, align: 'right', render: (val) => val ? val.toFixed(2) : '-' },
+                                { title: '数量', dataIndex: 'size', width: 80, align: 'right', render: (val) => val ? val : '-' },
+                                { title: '费用', dataIndex: 'comm', width: 80, align: 'right', render: (val) => val ? val.toFixed(2) : '-' },
+                                { 
+                                    title: '净利', dataIndex: 'pnl', width: 100, align: 'right',
+                                    sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
+                                    render: (pnl) => pnl !== null ? <span style={{ color: pnl > 0 ? '#cf1322' : '#3f8600', fontWeight: 'bold' }}>{pnl.toFixed(2)}</span> : '-' 
+                                },
+                                { 
+                                    title: '收益率', dataIndex: 'pct', width: 90, align: 'right',
+                                    sorter: (a, b) => (a.pct || 0) - (b.pct || 0),
+                                    render: (pct) => pct !== null ? <span style={{ color: pct > 0 ? '#cf1322' : '#3f8600' }}>{pct.toFixed(2)}%</span> : '-' 
+                                },
+                                { title: '持仓', dataIndex: 'pos', width: 80, align: 'right', render: (val) => val !== null ? val : '-' },
+                                { title: '成本', dataIndex: 'cost', width: 100, align: 'right', render: (val) => val ? val.toFixed(2) : '-' },
+                                { 
+                                    title: '详情', dataIndex: 'content',
+                                    render: (text, record) => {
+                                        const hasStructuredData = record.price !== null || record.size !== null || record.pnl !== null;
+                                        if (['buy', 'sell', 'profit'].includes(record.type) && hasStructuredData) {
+                                            let parts = [];
+                                            if (record.dir) parts.push(`方向: ${record.dir}`);
+                                            if (record.mdd) parts.push(`回撤: ${record.mdd.toFixed(2)}`);
+                                            return <span style={{ color: '#999', fontSize: '12px' }}>{parts.join(', ')}</span>;
+                                        }
+                                        return <span style={{ fontFamily: 'monospace', color: '#333' }}>{text}</span>;
+                                    }
+                                }
                             ]}
                             pagination={{ pageSize: 50, showSizeChanger: true }}
-                            scroll={{ y: 500 }}
+                            scroll={{ x: 1100, y: 500 }}
                             size="small"
                             rowKey="key"
                             bordered

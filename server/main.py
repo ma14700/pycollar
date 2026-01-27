@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
+from functools import lru_cache
 import uvicorn
 import sys
 import os
@@ -53,6 +54,17 @@ class BacktestRequest(BaseModel):
     strategy_name: str = "TrendFollowingStrategy"
     data_source: str = "main" # 数据来源: main (主力), weighted (加权/指数)
 
+@lru_cache(maxsize=1)
+def get_all_stock_info():
+    try:
+        # 获取A股股票列表 (代码, 名称)
+        # 结果包含: code, name
+        df = ak.stock_info_a_code_name()
+        return df
+    except Exception as e:
+        print(f"Error fetching stock list from AkShare: {e}")
+        return None
+
 @app.get("/api/symbols")
 async def get_symbols(market_type: str = 'futures'):
     if market_type == 'futures':
@@ -70,19 +82,56 @@ async def get_symbols(market_type: str = 'futures'):
             })
         return {"futures": futures_list}
     elif market_type == 'stock':
-        # Return a static list of popular stocks/indices for now
-        stocks_list = [
+        stocks_list = []
+        
+        # 1. Add Indices (Hardcoded as they are not in stock_info_a_code_name usually)
+        indices = [
             {"code": "sh000001", "name": "上证指数", "multiplier": 1},
             {"code": "sz399001", "name": "深证成指", "multiplier": 1},
             {"code": "sh000300", "name": "沪深300", "multiplier": 1},
-            {"code": "sh600519", "name": "贵州茅台", "multiplier": 100}, # Stock lot size is 100
-            {"code": "sz000858", "name": "五粮液", "multiplier": 100},
-            {"code": "sh600036", "name": "招商银行", "multiplier": 100},
-            {"code": "sz002594", "name": "比亚迪", "multiplier": 100},
-            {"code": "sh601318", "name": "中国平安", "multiplier": 100},
-            {"code": "sz300750", "name": "宁德时代", "multiplier": 100},
-            {"code": "sh600030", "name": "中信证券", "multiplier": 100}
+            {"code": "sh000905", "name": "中证500", "multiplier": 1},
+            {"code": "sh000852", "name": "中证1000", "multiplier": 1},
+            {"code": "sz399006", "name": "创业板指", "multiplier": 1},
         ]
+        stocks_list.extend(indices)
+
+        # 2. Fetch Stocks
+        df = get_all_stock_info()
+        
+        if df is not None and not df.empty:
+            # Optimize iteration
+            records = df.to_dict('records')
+            for row in records:
+                code = str(row['code'])
+                name = row['name']
+                
+                # Determine prefix
+                full_code = code
+                if len(code) == 6:
+                    if code.startswith('6'):
+                        full_code = f"sh{code}"
+                    elif code.startswith('0') or code.startswith('3'):
+                        full_code = f"sz{code}"
+                    elif code.startswith('4') or code.startswith('8') or code.startswith('9'):
+                        full_code = f"bj{code}"
+                
+                stocks_list.append({
+                    "code": full_code,
+                    "name": name,
+                    "multiplier": 100 # Default stock multiplier
+                })
+        else:
+             # Fallback to hardcoded list if network fails
+             stocks_list.extend([
+                {"code": "sh600519", "name": "贵州茅台", "multiplier": 100},
+                {"code": "sz000858", "name": "五粮液", "multiplier": 100},
+                {"code": "sh600036", "name": "招商银行", "multiplier": 100},
+                {"code": "sz002594", "name": "比亚迪", "multiplier": 100},
+                {"code": "sh601318", "name": "中国平安", "multiplier": 100},
+                {"code": "sz300750", "name": "宁德时代", "multiplier": 100},
+                {"code": "sh600030", "name": "中信证券", "multiplier": 100}
+             ])
+             
         return {"stocks": stocks_list}
     else:
         return {"error": "Invalid market_type"}
@@ -410,4 +459,4 @@ async def delete_backtest(record_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
