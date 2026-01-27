@@ -406,6 +406,107 @@ class DKXFixedTPSLStrategy(DKXStrategy):
             self.cancel_sl_tp()
             self.order = self.order_target_size(target=-self.params.fixed_size)
 
+class MA20MA55RiskRewardStrategy(BaseStrategy):
+    """
+    20/55双均线 + 固定盈亏比策略 (量化优化版)
+    逻辑：
+    1. 入场：MA20金叉MA55做多，死叉做空（维持原逻辑）
+    2. 止损：基于ATR的动态止损 (Entry - Multiplier * ATR)
+    3. 止盈：基于固定盈亏比 (Risk * RewardRatio)
+    4. 反手：若未触发止盈止损，出现反向信号则立即反手
+    """
+    params = (
+        ('fast_period', 20),
+        ('slow_period', 55),
+        ('risk_reward_ratio', 2.0),   # 盈亏比，默认 2:1
+        ('atr_period', 14),           # ATR周期
+        ('atr_multiplier', 2.0),      # 止损ATR倍数
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.ma_fast = bt.ind.SMA(period=self.params.fast_period)
+        self.ma_slow = bt.ind.SMA(period=self.params.slow_period)
+        self.crossover = bt.ind.CrossOver(self.ma_fast, self.ma_slow)
+        self.atr = bt.ind.ATR(period=self.params.atr_period)
+        
+        self.sl_order = None
+        self.tp_order = None
+
+    def notify_order(self, order):
+        super().notify_order(order)
+        
+        # 订单完成时处理
+        if order.status == order.Completed:
+            # 检查是否是止损或止盈单成交
+            is_sl_tp = (self.sl_order and order.ref == self.sl_order.ref) or \
+                       (self.tp_order and order.ref == self.tp_order.ref)
+            
+            if is_sl_tp:
+                self.log(f'止盈/止损成交: {order.executed.price:.2f}')
+                self.cancel_sl_tp()
+            
+            # 如果是主开仓单成交 (size != 0 且仓位增加/反手)
+            elif order.executed.size != 0:
+                # 只有当持仓存在时才设置止损止盈
+                if self.position.size != 0:
+                    self.place_sl_tp_orders(order.executed.price, self.position.size)
+
+    def place_sl_tp_orders(self, entry_price, size):
+        # 先取消旧的
+        self.cancel_sl_tp()
+        
+        # 计算动态风险距离 (Risk)
+        atr_val = self.atr[0]
+        risk_dist = atr_val * self.params.atr_multiplier
+        
+        # 计算目标盈利距离 (Reward)
+        reward_dist = risk_dist * self.params.risk_reward_ratio
+        
+        if size > 0: # 多头
+            sl_price = entry_price - risk_dist
+            tp_price = entry_price + reward_dist
+            self.log(f'设置多头止损: {sl_price:.2f} (ATR={atr_val:.2f}), 止盈: {tp_price:.2f} (盈亏比={self.params.risk_reward_ratio})')
+            
+            self.sl_order = self.sell(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
+            self.tp_order = self.sell(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+            
+        elif size < 0: # 空头
+            sl_price = entry_price + risk_dist
+            tp_price = entry_price - reward_dist
+            self.log(f'设置空头止损: {sl_price:.2f} (ATR={atr_val:.2f}), 止盈: {tp_price:.2f} (盈亏比={self.params.risk_reward_ratio})')
+            
+            self.sl_order = self.buy(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
+            self.tp_order = self.buy(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+
+    def cancel_sl_tp(self):
+        if self.sl_order:
+            self.cancel(self.sl_order)
+            self.sl_order = None
+        if self.tp_order:
+            self.cancel(self.tp_order)
+            self.tp_order = None
+
+    def next(self):
+        if not self.pre_next():
+            return
+
+        if self.order and self.order.status not in [bt.Order.Completed, bt.Order.Canceled, bt.Order.Rejected, bt.Order.Margin]:
+            return
+
+        # 信号逻辑：均线交叉
+        if self.crossover > 0: # 金叉
+            # 无论当前是否有空单，直接反手做多 (target=fixed_size)
+            # 如果之前有止损止盈单，notify_order 会处理取消，或者这里显式取消更安全
+            self.cancel_sl_tp() 
+            self.log(f'金叉信号: 做多 (MA{self.params.fast_period}={self.ma_fast[0]:.2f} > MA{self.params.slow_period}={self.ma_slow[0]:.2f})')
+            self.order = self.order_target_size(target=self.params.fixed_size)
+            
+        elif self.crossover < 0: # 死叉
+            self.cancel_sl_tp()
+            self.log(f'死叉信号: 做空 (MA{self.params.fast_period}={self.ma_fast[0]:.2f} < MA{self.params.slow_period}={self.ma_slow[0]:.2f})')
+            self.order = self.order_target_size(target=-self.params.fixed_size)
+
 class DKXPartialTakeProfitStrategy(DKXStrategy):
     """
     DKX + 盈利平半仓 (简化版，仅平仓一次)

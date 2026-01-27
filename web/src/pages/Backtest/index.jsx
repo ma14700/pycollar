@@ -254,6 +254,20 @@ const BacktestPage = () => {
             fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier
         };
+      } else if (strategyType === 'MA20MA55RiskRewardStrategy') {
+        params = {
+            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
+            risk_reward_ratio: values.risk_reward_ratio ? parseFloat(values.risk_reward_ratio) : 2.0,
+            atr_period: values.atr_period ? parseInt(values.atr_period) : 14,
+            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 2.0,
+            risk_per_trade: riskPerTrade,
+            equity_percent: equityPercent,
+            margin_rate: marginRate,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
+            contract_multiplier: contractMultiplier
+        };
       }
 
       const payload = {
@@ -408,7 +422,7 @@ const BacktestPage = () => {
                         setStrategyType(val);
                         setSavedStrategyType(val);
                         // 切换策略时重置默认值
-                        if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy') {
+                        if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy') {
                             let initialValues = {
                                 atr_period: 14,
                                 atr_multiplier: 3.0,
@@ -422,7 +436,7 @@ const BacktestPage = () => {
                                 initialValues.macd_fast = 12;
                                 initialValues.macd_slow = 26;
                                 initialValues.macd_signal = 9;
-                        } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy' || val === 'DualMAFixedTPSLStrategy') {
+                        } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy' || val === 'DualMAFixedTPSLStrategy' || val === 'MA20MA55RiskRewardStrategy') {
                                 initialValues.fast_period = 20;
                                 initialValues.slow_period = 55;
                                 if (val === 'MA20MA55PartialTakeProfitStrategy') {
@@ -433,6 +447,9 @@ const BacktestPage = () => {
                                     initialValues.sl_value = 50;
                                     initialValues.tp_mode = 'points';
                                     initialValues.tp_value = 100;
+                                } else if (val === 'MA20MA55RiskRewardStrategy') {
+                                    initialValues.risk_reward_ratio = 2.0;
+                                    initialValues.atr_multiplier = 2.0;
                                 }
                             }
                             
@@ -483,6 +500,7 @@ const BacktestPage = () => {
                         <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                         <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                         <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                        <Option value="MA20MA55RiskRewardStrategy">20/55双均线+盈亏比优化</Option>
                         <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
                         <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
                         <Option value="DualMAFixedTPSLStrategy">20/55双均线+固定止盈止损</Option>
@@ -507,7 +525,7 @@ const BacktestPage = () => {
                     <DatePicker.RangePicker style={{ width: '100%' }} />
                 </Form.Item>
 
-                {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' ? (
+                {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -525,6 +543,29 @@ const BacktestPage = () => {
                             <Form.Item name="take_profit_points" label="盈利平半仓点数" tooltip="当浮动盈利达到此点数时，平掉一半仓位">
                                 <Input type="number" />
                             </Form.Item>
+                        )}
+                        {strategyType === 'MA20MA55RiskRewardStrategy' && (
+                            <>
+                                <Row gutter={16}>
+                                    <Col span={12}>
+                                        <Form.Item name="risk_reward_ratio" label="盈亏比(R:R)" tooltip="止盈距离 / 止损距离">
+                                            <Input type="number" step="0.1" />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={12}>
+                                        <Form.Item name="atr_multiplier" label="止损ATR倍数" tooltip="止损距离 = ATR * 倍数">
+                                            <Input type="number" step="0.1" />
+                                        </Form.Item>
+                                    </Col>
+                                </Row>
+                                <Row gutter={16}>
+                                    <Col span={12}>
+                                        <Form.Item name="atr_period" label="ATR周期">
+                                            <Input type="number" />
+                                        </Form.Item>
+                                    </Col>
+                                </Row>
+                            </>
                         )}
                         {strategyType === 'DualMAFixedTPSLStrategy' && (
                             <>
@@ -661,7 +702,7 @@ const BacktestPage = () => {
                 >
                     {({ getFieldValue }) => {
                         const sizeMode = getFieldValue('size_mode');
-                        if (strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') {
+                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy') {
                             return (
                                 <Form.Item name="atr_multiplier" label="ATR止损倍数">
                                     <Input type="number" step="0.1" />
@@ -672,7 +713,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' ? (
+                {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' ? (
                     <>
                         <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                             <Radio.Group>
@@ -734,7 +775,7 @@ const BacktestPage = () => {
                 <Form.Item name="contract_multiplier" label="合约乘数" hidden>
                     <Input type="number" />
                 </Form.Item>
-                <Form.Item name="atr_period" hidden><Input /></Form.Item>
+                {strategyType !== 'MA20MA55RiskRewardStrategy' && <Form.Item name="atr_period" hidden><Input /></Form.Item>}
 
                 <Form.Item label="自动优化 (若收益<20%)" tooltip="当回测年化收益率低于20%时，系统会自动尝试优化参数以寻找更好的结果。">
                     <Switch checked={autoOptimize} onChange={setAutoOptimize} />

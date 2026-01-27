@@ -5,6 +5,7 @@ import BacktestPage from '../pages/Backtest';
 import EditorPage from '../pages/Editor';
 import LogsPage from '../pages/Logs';
 import HistoryPage from '../pages/History';
+import TomorrowStrategyPage from '../pages/TomorrowStrategy';
 
 const router = createBrowserRouter([
   {
@@ -18,6 +19,10 @@ const router = createBrowserRouter([
       {
         path: 'backtest',
         element: <BacktestPage />,
+      },
+      {
+        path: 'tomorrow-strategy',
+        element: <TomorrowStrategyPage />,
       },
       {
         path: 'editor',

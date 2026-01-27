@@ -109,22 +109,28 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
                         // 优先使用后端提供的 action (如"反手做多")，若无则回退到基础类型
                         const name = sig.action || (sig.type === 'buy' ? '买入' : '卖出');
                         
-                        // 计算显示手数：
-                        // 1. 如果是反手操作，成交量(size)通常包含平仓和开仓两部分（例如平20开20，size=40）
-                        //    此时用户通常希望看到的是持仓后的净头寸（20手），即 sig.position 的绝对值。
-                        // 2. 其他情况（开仓、平仓、加减仓），直接显示成交量 sig.size。
-                        let displaySize = Math.abs(sig.size || 0);
-                        if (name.includes('反手') && sig.position !== undefined) {
-                             displaySize = Math.abs(sig.position);
+                        let valueStr;
+                        if (sig.custom_label) {
+                            valueStr = sig.custom_label;
+                        } else {
+                            // 计算显示手数：
+                            // 1. 如果是反手操作，成交量(size)通常包含平仓和开仓两部分（例如平20开20，size=40）
+                            //    此时用户通常希望看到的是持仓后的净头寸（20手），即 sig.position 的绝对值。
+                            // 2. 其他情况（开仓、平仓、加减仓），直接显示成交量 sig.size。
+                            let displaySize = Math.abs(sig.size || 0);
+                            if (name.includes('反手') && sig.position !== undefined) {
+                                displaySize = Math.abs(sig.position);
+                            }
+                            valueStr = `${name}\n${displaySize}手`;
                         }
 
                         return {
                             name: name,
                             coord: [sig.date, sig.price],
                             // 显示操作名称和手数
-                            value: `${name}\n${displaySize}手`,
+                            value: valueStr,
                             itemStyle: { 
-                                color: sig.type === 'buy' ? '#ef232a' : '#14b143' 
+                                color: sig.itemStyle?.color || (sig.type === 'buy' ? '#ef232a' : '#14b143') 
                             },
                             label: {
                                 show: true,

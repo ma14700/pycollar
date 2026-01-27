@@ -14,6 +14,21 @@ class StrategyData(bt.feeds.PandasData):
     )
 
 class BacktestEngine:
+    def _filter_params(self, StrategyClass, params):
+        """
+        根据策略类定义过滤参数，防止传入多余参数导致报错
+        """
+        if not hasattr(StrategyClass, 'params'):
+            return params
+            
+        valid_params = {}
+        # StrategyClass.params 是 AutoInfoClass 实例，包含所有继承链上的参数默认值
+        for k, v in params.items():
+            if hasattr(StrategyClass.params, k):
+                valid_params[k] = v
+        
+        return valid_params
+
     def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main'):
         print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
@@ -396,7 +411,8 @@ class BacktestEngine:
         
         # 检查是否开启“开仓最优模式” (Optimal Entry)
         # 如果开启，启用 cheat_on_open 以便能在当前 K 线上以 Limit 价格成交
-        if strategy_params.get('optimal_entry'):
+        # NOTE: Remove from params to avoid passing to strategy __init__
+        if strategy_params.pop('optimal_entry', False):
             cerebro.broker.set_coo(True)
             print("DEBUG: Optimal Entry Mode Enabled (Cheat On Open = True)")
         
@@ -483,7 +499,17 @@ class BacktestEngine:
         if 'contract_multiplier' in strategy_params:
             strategy_params['contract_multiplier'] = int(strategy_params['contract_multiplier'])
             
-        cerebro.addstrategy(LoggingStrategy, **strategy_params)
+        # 过滤掉不属于策略的参数
+        filtered_params = self._filter_params(StrategyClass, strategy_params)
+
+        # 动态创建混合策略类，使其同时继承 LoggingStrategy 和 StrategyClass
+        # 这样 LoggingStrategy 就能捕获 StrategyClass 的行为，同时记录日志
+        class MixedStrategy(LoggingStrategy, StrategyClass):
+             pass
+
+        # MixedStrategy 会继承 StrategyClass 的 params，以及 LoggingStrategy 的逻辑
+        # 我们传递过滤后的参数给 MixedStrategy
+        cerebro.addstrategy(MixedStrategy, **filtered_params)
         
         # 3. 资金设置
         cerebro.broker.setcash(initial_cash)
@@ -839,3 +865,149 @@ class BacktestEngine:
         }
         
         return clean_data(raw_result)
+
+    def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures'):
+        """
+        批量分析策略状态
+        """
+        importlib.reload(strategy)
+        
+        if not hasattr(strategy, strategy_name):
+             if hasattr(strategy, 'TrendFollowingStrategy'):
+                 strategy_name = 'TrendFollowingStrategy'
+             else:
+                 return {"error": f"Strategy '{strategy_name}' not found."}
+        
+        StrategyClass = getattr(strategy, strategy_name)
+        
+        # 简单包装策略以获取最终状态
+        class BatchStrategy(StrategyClass):
+            def __init__(self):
+                self.last_entry_price = "-"
+                super().__init__()
+
+            def notify_order(self, order):
+                if order.status == order.Completed:
+                    # 如果有持仓，记录开仓均价
+                    if self.position.size != 0:
+                        self.last_entry_price = self.position.price
+                super().notify_order(order)
+            
+            def pre_next(self):
+                # 覆盖 BaseStrategy.pre_next 以防止回测结束时强制平仓
+                # 仅保留 start_date 检查
+                if self.params.start_date:
+                    current_date = self.datas[0].datetime.date(0)
+                    start_date = self.params.start_date
+                    if isinstance(start_date, str):
+                        try:
+                            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
+                        except:
+                            pass
+                    if isinstance(start_date, datetime.datetime):
+                        start_date = start_date.date()
+                        
+                    if current_date < start_date:
+                        return False
+                return True
+
+            def stop(self):
+                # 记录最终状态
+                self.final_size = self.position.size
+                if self.position.size != 0:
+                    self.final_entry_price = self.position.price
+                else:
+                    self.final_entry_price = self.last_entry_price
+                
+                if hasattr(super(), 'stop'):
+                    super().stop()
+
+        results = []
+        
+        # Handle optimal_entry
+        use_optimal_entry = strategy_params.pop('optimal_entry', False)
+        
+        # 预先过滤策略参数
+        filtered_strategy_params = self._filter_params(StrategyClass, strategy_params)
+        
+        # 默认回测最近1年数据，确保指标计算充分
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+
+        for symbol in symbols:
+            try:
+                # 获取数据
+                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type)
+                
+                if df is not None:
+                    # Ensure lowercase columns for backtrader
+                    df.columns = [c.lower() for c in df.columns]
+                
+                if df is None or df.empty:
+                    results.append({
+                        "symbol": symbol,
+                        "name": symbol, # Placeholder, caller should map name
+                        "price": 0,
+                        "direction": "数据缺失",
+                        "entry_price": "-"
+                    })
+                    continue
+
+                cerebro = bt.Cerebro()
+                # 禁用标准输出
+                cerebro.check = False
+                
+                if use_optimal_entry:
+                    cerebro.broker.set_coo(True)
+                
+                # 设置初始资金 (足够大以避免margin问题)
+                cerebro.broker.setcash(10000000.0)
+                # 设置手续费
+                cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
+
+                data = bt.feeds.PandasData(dataname=df)
+                cerebro.adddata(data)
+                
+                # 添加策略
+                cerebro.addstrategy(BatchStrategy, **filtered_strategy_params)
+                
+                # 运行 (不生成图表数据，速度较快)
+                strats = cerebro.run()
+                if not strats:
+                    continue
+                    
+                strat = strats[0]
+                
+                # 获取当前价格
+                current_price = df['close'].iloc[-1]
+                
+                # 判断方向
+                size = getattr(strat, 'final_size', 0)
+                entry_price = getattr(strat, 'final_entry_price', "-")
+                
+                direction = "空仓"
+                color = "default" # default/green/red
+                
+                if size > 0:
+                    direction = "多"
+                elif size < 0:
+                    direction = "空"
+                
+                results.append({
+                    "symbol": symbol,
+                    "price": float(current_price),
+                    "direction": direction,
+                    "entry_price": entry_price,
+                    "size": size
+                })
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"Error analyzing {symbol}: {e}")
+                results.append({
+                    "symbol": symbol,
+                    "error": str(e)
+                })
+        
+        return results
+
