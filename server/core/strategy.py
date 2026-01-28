@@ -123,9 +123,10 @@ class DKX(bt.Indicator):
     DKX = (20*MID + 19*REF(MID,1) + ... + 1*REF(MID,19)) / 210
     MADKX = MA(DKX, 10)
     
-    注：上述公式等价于 SMMA (Smoothed Moving Average)
-    DKX = SMMA(MID, period)
-    MADKX = SMMA(DKX, ma_period)
+    修正：
+    原代码错误地使用了 SMMA (平滑移动平均)。
+    标准 DKX 实际上是 WMA (线性加权移动平均)，权重为 20, 19...1。
+    MADKX 通常为 SMA (简单移动平均)。
     """
     lines = ('dkx', 'madkx',)
     params = (('period', 20), ('ma_period', 10),)
@@ -134,11 +135,11 @@ class DKX(bt.Indicator):
         # 计算 MID
         mid = (3 * self.data.close + self.data.low + self.data.open + self.data.high) / 6.0
         
-        # 使用 Backtrader 的 SMMA (如果公式匹配)
-        # 引擎中的公式: new = (val + (n-1)*old) / n
-        # 这正是 Wilder's Smoothing (SMMA)
-        self.l.dkx = bt.ind.SMMA(mid, period=self.params.period)
-        self.l.madkx = bt.ind.SMMA(self.l.dkx, period=self.params.ma_period)
+        # DKX: 使用加权移动平均 (WMA)
+        self.l.dkx = bt.ind.WeightedMovingAverage(mid, period=self.params.period)
+        
+        # MADKX: 使用简单移动平均 (SMA)
+        self.l.madkx = bt.ind.SMA(self.l.dkx, period=self.params.ma_period)
 
 # --- 具体策略类 ---
 

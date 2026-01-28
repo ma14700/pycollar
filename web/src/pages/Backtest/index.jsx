@@ -14,17 +14,20 @@ import MetricsPanel from '../../components/MetricsPanel';
 import ChartPanel from '../../components/ChartPanel';
 import { useBacktest } from '../../context/BacktestContext';
 
+import SingleBacktestResult from './SingleBacktestResult';
+import BatchBacktestResult from './BatchBacktestResult';
+
 const { Option } = Select;
 
 const BacktestPage = () => {
   const { results, setResults, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType } = useBacktest();
   const [loading, setLoading] = useState(false);
-  const [chartType, setChartType] = useState('line');
   const [form] = Form.useForm();
   const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   
   // Local cache for lists to avoid repeated API calls if we were to move this to context fully
   // For now, we fetch on mount if symbols is empty or just fetch every time to be safe
@@ -50,9 +53,16 @@ const BacktestPage = () => {
             const marketType = savedFormValues.market_type || 'futures';
             const list = marketType === 'stock' ? sList : fList;
             setSymbols(list || []);
-            form.setFieldsValue(savedFormValues);
-            if (savedFormValues.symbol) {
-                fetchQuote(savedFormValues.symbol);
+            
+            // 确保 symbol 是数组，兼容旧的单选配置
+            const initialValues = { ...savedFormValues };
+            if (initialValues.symbol && !Array.isArray(initialValues.symbol)) {
+                initialValues.symbol = [initialValues.symbol];
+            }
+            
+            form.setFieldsValue(initialValues);
+            if (initialValues.symbol && initialValues.symbol.length > 0) {
+                fetchQuote(initialValues.symbol);
             }
         } else {
             // Initialize with futures
@@ -85,22 +95,27 @@ const BacktestPage = () => {
         defaultSymbol = list.find(s => s.code === 'SH0') || list[0];
       }
       
+      // 默认选中一个，作为数组
       form.setFieldsValue({ 
-        symbol: defaultSymbol.code, 
+        symbol: [defaultSymbol.code], 
         contract_multiplier: defaultSymbol.multiplier
       });
       fetchQuote(defaultSymbol.code);
     } else {
-      form.setFieldsValue({ symbol: undefined });
+      form.setFieldsValue({ symbol: [] });
       setQuoteInfo(null);
     }
   };
 
   const fetchQuote = (symbol) => {
     if (!symbol) return;
+    // 如果是数组（多选），只获取第一个的行情，或者不获取
+    const targetSymbol = Array.isArray(symbol) ? symbol[0] : symbol;
+    if (!targetSymbol) return;
+
     const marketType = form.getFieldValue('market_type') || 'futures';
     const dataSource = form.getFieldValue('data_source') || 'main';
-    axios.get(`http://localhost:8000/api/quote/latest?symbol=${symbol}&market_type=${marketType}&data_source=${dataSource}`)
+    axios.get(`http://localhost:8000/api/quote/latest?symbol=${targetSymbol}&market_type=${marketType}&data_source=${dataSource}`)
       .then(res => {
         setQuoteInfo(res.data);
       })
@@ -111,16 +126,48 @@ const BacktestPage = () => {
   };
 
   const onSymbolChange = (value) => {
-    const selected = symbols.find(s => s.code === value);
-    if (selected) {
-      form.setFieldsValue({ contract_multiplier: selected.multiplier });
+    // value 是数组
+    if (Array.isArray(value) && value.length > 0) {
+        // 取最后一个选中的作为参考来设置乘数
+        const lastSelected = value[value.length - 1];
+        const selected = symbols.find(s => s.code === lastSelected);
+        if (selected) {
+            form.setFieldsValue({ contract_multiplier: selected.multiplier });
+        }
+        // 如果只选了一个，获取行情；否则清空行情面板以免混淆
+        if (value.length === 1) {
+            fetchQuote(lastSelected);
+        } else {
+            setQuoteInfo(null);
+        }
+    } else {
+        setQuoteInfo(null);
     }
-    fetchQuote(value);
   };
 
   const onFinish = async (values) => {
+    let selectedSymbols = values.symbol;
+    // 类型安全检查：确保是数组
+    if (selectedSymbols && !Array.isArray(selectedSymbols)) {
+        selectedSymbols = [selectedSymbols];
+    }
+
+    if (!selectedSymbols || selectedSymbols.length === 0) {
+        message.error('请至少选择一个品种');
+        return;
+    }
+
     setLoading(true);
-    setResults(null);
+    setResults(null); // Clear previous results
+    
+    // 如果是单个品种，保持原有逻辑（但为了统一，可以视为长度为1的批量）
+    // 为了更好的用户体验，如果只选了一个，直接展示结果，不显示折叠面板
+    // 如果选了多个，则使用新逻辑
+    
+    const isBatch = selectedSymbols.length > 1;
+    const batchResults = [];
+    let completedCount = 0;
+    
     try {
       let params = {};
       const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
@@ -281,30 +328,80 @@ const BacktestPage = () => {
         };
       }
 
-      const payload = {
-        symbol: values.symbol,
-        period: values.period,
-        market_type: values.market_type || 'futures',
-        data_source: values.data_source || 'main',
-        strategy_params: params,
-        initial_cash: parseFloat(values.initial_cash || 1000000),
-        auto_optimize: autoOptimize,
-        strategy_name: strategyType
-      };
-
       setCurrentParams(params);
+      
+      // 批量执行逻辑
+      // 为每个品种构建 payload
+      for (const symbolCode of selectedSymbols) {
+          // 获取品种特定的 multiplier
+          const symbolObj = symbols.find(s => s.code === symbolCode);
+          const specificMultiplier = symbolObj ? symbolObj.multiplier : contractMultiplier;
+          
+          // 复制并覆盖 multiplier
+          const specificParams = { ...params, contract_multiplier: specificMultiplier };
 
-      if (values.date_range && values.date_range.length === 2) {
-        payload.start_date = values.date_range[0].format('YYYY-MM-DD');
-        payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+          const payload = {
+            symbol: symbolCode,
+            period: values.period,
+            market_type: values.market_type || 'futures',
+            data_source: values.data_source || 'main',
+            strategy_params: specificParams,
+            initial_cash: parseFloat(values.initial_cash || 1000000),
+            auto_optimize: autoOptimize,
+            strategy_name: strategyType
+          };
+
+          if (values.date_range && values.date_range.length === 2) {
+            payload.start_date = values.date_range[0].format('YYYY-MM-DD');
+            payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+          }
+          
+          try {
+              // 串行执行以避免并发问题 (如果后端支持，可以改为 Promise.all)
+              const response = await axios.post('http://localhost:8000/api/backtest', payload);
+              batchResults.push({
+                  symbol: symbolCode,
+                  success: true,
+                  data: response.data
+              });
+          } catch (err) {
+              console.error(`Backtest failed for ${symbolCode}:`, err);
+              batchResults.push({
+                  symbol: symbolCode,
+                  success: false,
+                  error: err.response?.data?.detail || err.message
+              });
+          }
+          
+          completedCount++;
+          // 可以添加 setProgress(completedCount / total)
       }
       
-      const response = await axios.post('http://localhost:8000/api/backtest', payload);
-      setResults(response.data);
-      message.success('回测完成');
+      // 处理结果
+      if (batchResults.length === 1) {
+          if (batchResults[0].success) {
+              setResults(batchResults[0].data);
+              message.success('回测完成');
+          } else {
+              message.error(`回测失败: ${batchResults[0].error}`);
+          }
+      } else {
+          // 多品种结果
+          setResults({
+              isBatch: true,
+              items: batchResults,
+              summary: {
+                  total: batchResults.length,
+                  success: batchResults.filter(r => r.success).length,
+                  failed: batchResults.filter(r => !r.success).length
+              }
+          });
+          message.success(`批量回测完成: 成功 ${batchResults.filter(r => r.success).length}/${batchResults.length}`);
+      }
+
     } catch (error) {
       console.error(error);
-      message.error('回测失败: ' + (error.response?.data?.detail || error.message));
+      message.error('执行出错: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -349,7 +446,7 @@ const BacktestPage = () => {
   return (
     <div style={{ height: '100%', padding: '24px' }}>
         <Row gutter={24} style={{ height: '100%' }}>
-            <Col span={6}>
+            <Col span={isFullScreen ? 0 : 6} style={{ display: isFullScreen ? 'none' : 'block' }}>
             <Card title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
                 <Form form={form} layout="vertical" onFinish={onFinish} 
                     onValuesChange={(changedValues, allValues) => {
@@ -408,6 +505,7 @@ const BacktestPage = () => {
                                     <Select 
                                     onChange={onSymbolChange}
                                     showSearch
+                                    mode="multiple"
                                     placeholder="选择或搜索品种"
                                     optionFilterProp="children"
                                     filterOption={(input, option) =>
@@ -836,56 +934,18 @@ const BacktestPage = () => {
             </Card>
             </Col>
             
-            <Col span={18} style={{ height: '100%', overflowY: 'auto' }}>
+            <Col span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
             {results ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                {results.optimization_info?.triggered && (
-                    <Alert
-                        message="策略已自动优化"
-                        description={
-                            <div>
-                                <p>{results.optimization_info.message}</p>
-                                <div>
-                                    <Tag color="orange">原始收益: {results.optimization_info.original_return.toFixed(2)}%</Tag>
-                                    <Tag color="green">优化后收益: {results.optimization_info.optimized_return.toFixed(2)}%</Tag>
-                                </div>
-                            </div>
-                        }
-                        type="success"
-                        showIcon
+                results.isBatch ? (
+                    <BatchBacktestResult 
+                        results={results} 
+                        symbols={symbols}
+                        isFullScreen={isFullScreen}
+                        onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
                     />
-                )}
-                
-                <Card 
-                    title={<span><DashboardOutlined /> 回测概览</span>} 
-                    variant="borderless"
-                    style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
-                >
-                    <MetricsPanel metrics={results.metrics} />
-                </Card>
-                
-                <Card 
-                    title={
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <LineChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-                            {chartType === 'line' ? "账户权益曲线" : 
-                                chartType === 'kline' ? "K线图 & 交易信号" :
-                                "盈亏分布分析"}
-                        </div>
-                    } 
-                    variant="borderless"
-                    style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
-                    extra={
-                        <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)} buttonStyle="solid">
-                            <Radio.Button value="line"><LineChartOutlined /> 趋势图</Radio.Button>
-                            <Radio.Button value="kline"><LineChartOutlined /> K线图</Radio.Button>
-                            <Radio.Button value="pie"><LineChartOutlined /> 盈亏分布</Radio.Button>
-                        </Radio.Group>
-                    }
-                >
-                    <ChartPanel chartType={chartType} results={results} onChartClick={(params) => console.log('Chart clicked:', params)} />
-                </Card>
-                </div>
+                ) : (
+                    <SingleBacktestResult results={results} />
+                )
             ) : (
                 <div style={{ 
                     height: '100%', 

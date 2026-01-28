@@ -790,32 +790,20 @@ class BacktestEngine:
                 dkx_ma_period = int(strategy_params.get('dkx_ma_period', 10))
                 
                 mid = (3 * df_kline['Close'] + df_kline['Low'] + df_kline['Open'] + df_kline['High']) / 6.0
-                dkx_values = []
-                madkx_values = []
-                dkx_prev = None
-                madkx_prev = None
-                for v in mid.values:
-                    if pd.isna(v):
-                        dkx_values.append(None)
-                        madkx_values.append(None)
-                        continue
-
-                    if dkx_prev is None:
-                        dkx_cur = v
-                    else:
-                        dkx_cur = (v + (dkx_period - 1) * dkx_prev) / dkx_period
-                    dkx_prev = dkx_cur
-                    if madkx_prev is None:
-                        madkx_cur = dkx_cur
-                    else:
-                        madkx_cur = (dkx_cur + (dkx_ma_period - 1) * madkx_prev) / dkx_ma_period
-                    madkx_prev = madkx_cur
-                    dkx_values.append(dkx_cur)
-                    madkx_values.append(madkx_cur)
+                
+                # 计算 DKX (WMA)
+                # DKX = (20*MID + 19*REF(MID,1) + ... + 1*REF(MID,19)) / 210
+                dkx_values = mid.rolling(window=dkx_period).apply(
+                    lambda x: np.dot(x, np.arange(1, dkx_period + 1)) / (dkx_period * (dkx_period + 1) / 2),
+                    raw=True
+                )
+                
+                # 计算 MADKX (SMA)
+                madkx_values = dkx_values.rolling(window=dkx_ma_period).mean()
                 
                 kline_data['dkx'] = {
-                    "dkx": dkx_values,
-                    "madkx": madkx_values
+                    "dkx": dkx_values.fillna(0).tolist(),
+                    "madkx": madkx_values.fillna(0).tolist()
                 }
             except Exception as e:
                 print(f"DKX Calculation Error: {e}")
