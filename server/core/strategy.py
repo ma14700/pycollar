@@ -10,6 +10,7 @@ class BaseStrategy(bt.Strategy):
         ('print_log', True),
         ('start_date', None),
         ('end_date', None), # 新增结束日期参数
+        ('disable_auto_close', False), # 是否禁用自动平仓
         ('contract_multiplier', 1),
         ('atr_period', 14),
         ('atr_multiplier', 2.0),
@@ -102,15 +103,22 @@ class BaseStrategy(bt.Strategy):
                  is_near_end = True
 
         if is_near_end:
-            if self.position:
-                self.log('数据结束检查: 平掉所有持仓 (市价单)')
-                # 使用 Market 单在下一根(即最后一根)K线开盘时立即成交，确保平仓成功
-                self.close(exectype=bt.Order.Market) 
-            return False # 停止当前K线的其他信号处理
+            # 如果未禁用自动平仓，则执行平仓逻辑
+            if not self.params.disable_auto_close:
+                if self.position:
+                    self.log('数据结束检查: 平掉所有持仓 (市价单)')
+                    # 使用 Market 单在下一根(即最后一根)K线开盘时立即成交，确保平仓成功
+                    self.close(exectype=bt.Order.Market) 
+            
+            # 无论是否平仓，如果接近结束，都停止处理新信号，除非禁用了自动平仓(意味着我们希望在扫描模式下看到最新的信号)
+            # 对于扫描模式，我们希望看到最新K线的信号，所以如果禁用了自动平仓，就不应该返回 False
+            if not self.params.disable_auto_close:
+                return False # 停止当前K线的其他信号处理
             
         # 最后一根K线直接跳过，防止产生新信号
         if self.datas[0].buflen() > 0 and len(self.datas[0]) >= self.datas[0].buflen():
-            return False
+            if not self.params.disable_auto_close:
+                return False
 
         return True
 

@@ -477,5 +477,26 @@ async def batch_analyze(request: BatchAnalyzeRequest):
     )
     return {"results": results}
 
+class ScanRequest(BaseModel):
+    symbols: List[str]
+    period: str
+    scan_window: int
+    market_type: str = "futures"
+    strategy_params: Dict[str, Any]
+    strategy_name: str = "TrendFollowingStrategy"
+
+@app.post("/api/strategy/scan")
+async def scan_strategy(request: ScanRequest):
+    engine = BacktestEngine()
+    results = engine.scan_signals(
+        symbols=request.symbols,
+        period=request.period,
+        scan_window=request.scan_window,
+        strategy_params=request.strategy_params,
+        strategy_name=request.strategy_name,
+        market_type=request.market_type
+    )
+    return {"results": results}
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

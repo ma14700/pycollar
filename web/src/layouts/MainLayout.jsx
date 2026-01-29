@@ -6,7 +6,8 @@ import {
   CodeOutlined, 
   FileTextOutlined, 
   HistoryOutlined,
-  BulbOutlined
+  BulbOutlined,
+  ScanOutlined
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -21,6 +22,7 @@ const MainLayout = () => {
     const path = location.pathname;
     if (path === '/' || path === '/backtest') return '1';
     if (path === '/tomorrow-strategy') return '5';
+    if (path === '/symbol-scan') return '6';
     if (path === '/editor') return '2';
     if (path === '/logs') return '3';
     if (path === '/history') return '4';
@@ -43,6 +45,9 @@ const MainLayout = () => {
         break;
       case '5':
         navigate('/tomorrow-strategy');
+        break;
+      case '6':
+        navigate('/symbol-scan');
         break;
       default:
         navigate('/backtest');
@@ -78,6 +83,7 @@ const MainLayout = () => {
                     items={[
                         { key: '1', icon: <LineChartOutlined />, label: '策略回测' },
                         { key: '5', icon: <BulbOutlined />, label: '明日策略' },
+                        { key: '6', icon: <ScanOutlined />, label: '品种扫描' },
                         { key: '2', icon: <CodeOutlined />, label: '代码编辑' },
                         { key: '3', icon: <FileTextOutlined />, label: '交易日志' },
                         { key: '4', icon: <HistoryOutlined />, label: '回测记录' }

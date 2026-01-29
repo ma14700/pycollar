@@ -69,6 +69,32 @@ class BacktestEngine:
                 # 辅助记录最大最小PNL
                 self.max_trade_pnl = -float('inf')
                 self.min_trade_pnl = float('inf')
+            
+            def pre_next(self):
+                # 覆盖 BaseStrategy.pre_next 以防止回测结束时强制平仓
+                # 这里只保留 start_date 检查
+                if self.params.start_date:
+                    current_date = self.datas[0].datetime.date(0)
+                    start_date = self.params.start_date
+                    # 如果是字符串，尝试解析
+                    if isinstance(start_date, str):
+                        try:
+                            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
+                        except:
+                            pass
+                    if isinstance(start_date, datetime.datetime):
+                        start_date = start_date.date()
+                        
+                    if current_date < start_date:
+                        return False
+                
+                # 如果传入了 disable_auto_close=True (来自 scan_signals 的详情调用)
+                # 则跳过基类的平仓逻辑
+                if getattr(self.params, 'disable_auto_close', False):
+                    return True
+                
+                # 否则调用基类的逻辑 (普通回测需要强制平仓)
+                return super().pre_next()
 
             def start(self):
                 # 确保列表已初始化（防止某些情况下 __init__ 属性丢失）
@@ -980,18 +1006,281 @@ class BacktestEngine:
                 elif size < 0:
                     direction = "空"
                 
+                # 计算盈利点数
+                profit_points = 0
+                if entry_price != "-" and isinstance(entry_price, (int, float)):
+                    if size > 0:
+                        profit_points = current_price - entry_price
+                    elif size < 0:
+                        profit_points = entry_price - current_price
+                
                 results.append({
                     "symbol": symbol,
                     "price": float(current_price),
                     "direction": direction,
                     "entry_price": entry_price,
-                    "size": size
+                    "size": size,
+                    "profit_points": profit_points if size != 0 else "-"
                 })
                 
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 print(f"Error analyzing {symbol}: {e}")
+                results.append({
+                    "symbol": symbol,
+                    "error": str(e)
+                })
+        
+        return results
+
+    def scan_signals(self, symbols, period, scan_window, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures'):
+        """
+        扫描最近 N 根 K 线的开仓信号
+        """
+        importlib.reload(strategy)
+        
+        if not hasattr(strategy, strategy_name):
+             if hasattr(strategy, 'TrendFollowingStrategy'):
+                 strategy_name = 'TrendFollowingStrategy'
+             else:
+                 return {"error": f"Strategy '{strategy_name}' not found."}
+        
+        StrategyClass = getattr(strategy, strategy_name)
+        
+        class ScanStrategy(StrategyClass):
+            def __init__(self):
+                self.signals = []
+                self.last_pos_size = 0
+                self.order_creation = {} # 记录订单创建时的 bar index
+                self.order_creation_size = {} # 记录订单创建时的持仓状态
+                super().__init__()
+
+            def notify_order(self, order):
+                if order.status == order.Submitted:
+                    # 记录订单创建时间 (当前已处理的 Bar 数量)
+                    self.order_creation[order.ref] = len(self)
+                    # 记录订单创建时的持仓状态
+                    self.order_creation_size[order.ref] = self.position.size
+
+                if order.status == order.Completed:
+                    # 判断开平仓逻辑
+                    # 注意：notify_order 调用时，self.position 可能已经更新
+                    # 但为了准确判断，我们记录上一次的持仓大小
+                    
+                    current_size = self.position.size
+                    executed_size = order.executed.size # 带符号? backtrader order.executed.size 通常是正数，通过 isbuy/issell 判断方向? 
+                    # 不，order.executed.size 是绝对值。order.size 是带符号的。
+                    
+                    # 简单判定：
+                    # 如果成交后持仓绝对值增加，或者持仓方向改变，则视为"开仓"性质
+                    # 如果成交后持仓绝对值减小且同向，视为"平仓"
+                    
+                    is_entry = False
+                    action = ""
+                    
+                    # 以前的 size
+                    prev_size = self.last_pos_size
+                    
+                    if order.isbuy():
+                        # 买入
+                        if prev_size >= 0:
+                            is_entry = True # 加仓或开仓
+                            action = "买入开仓" if prev_size == 0 else "买入加仓"
+                        else:
+                            # 原持有空单
+                            if current_size >= 0:
+                                # 反手或平空后翻多
+                                is_entry = True # 翻多视为开仓
+                                action = "反手做多"
+                            else:
+                                is_entry = False # 平空
+                                action = "买入平空"
+                    else:
+                        # 卖出
+                        if prev_size <= 0:
+                            is_entry = True # 加空或开空
+                            action = "卖出开仓" if prev_size == 0 else "卖出加空"
+                        else:
+                            # 原持有多单
+                            if current_size <= 0:
+                                is_entry = True
+                                action = "反手做空"
+                            else:
+                                is_entry = False
+                                action = "卖出平多"
+                    
+                    # 更新记录的持仓
+                    self.last_pos_size = current_size
+                    
+                    if is_entry:
+                        dt = self.datas[0].datetime.datetime(0)
+                        # 记录 Bar 索引 (负数表示倒数第几根)
+                        # len(self) 是当前处理的 K 线总数
+                        # 我们在 run 之后会知道总长度 TotalLen
+                        # 这里先记录 index = len(self)
+                        self.signals.append({
+                            "date": dt.strftime('%Y-%m-%d'),
+                            "action": action,
+                            "price": order.executed.price,
+                            "bar_index": len(self) 
+                        })
+                        
+                super().notify_order(order)
+
+            def stop(self):
+                # 检查未成交订单 (Pending Orders)，捕获最新K线产生的信号
+                # 仅保留最近一根K线产生的订单
+                last_bar_idx = len(self)
+                
+                for order in self.broker.orders:
+                    if order.status in [order.Submitted, order.Accepted]:
+                        # 检查订单创建时间
+                        # 只有在最后一根 K 线（或非常接近末尾）生成的订单才被视为"新信号"
+                        creation_idx = self.order_creation.get(order.ref, 0)
+                        
+                        # 如果订单是很久以前创建的（比如 limit 单），忽略它
+                        # last_bar_idx 是当前 total_bars
+                        # 我们不再强制要求 creation_idx == last_bar_idx，而是交给外部的 scan_window 过滤
+                        # 但是，如果 creation_idx 确实太早了（比如 100 根之前），那确实应该忽略，避免数据量过大
+                        # 不过 scan_window 最大可能也就几百？
+                        # 安全起见，我们还是记录下来，让 scan_signals 函数去过滤
+                        
+                        # 计算 ago (倒数第几根)
+                        ago = last_bar_idx - creation_idx
+                        
+                        # 获取订单创建时的日期
+                        # 注意：self.datas[0].datetime 是当前(结束时)的时间轴
+                        # 我们可以通过 ago 来回溯
+                        # date(-ago)
+                        try:
+                            # ago = 0 means current bar (last_bar_idx)
+                            # date(0) is the date of last_bar_idx
+                            dt_date = self.datas[0].datetime.date(-ago)
+                            dt_str = dt_date.strftime('%Y-%m-%d')
+                        except:
+                            # Fallback to current date if out of bounds (should not happen if data is loaded)
+                            dt_str = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d')
+
+                        is_entry = False
+                        action = ""
+                        # 使用订单创建时的持仓状态来判断，而不是当前持仓状态
+                        # 这样可以避免历史持仓对当前信号判断的干扰
+                        creation_size = self.order_creation_size.get(order.ref, self.position.size)
+                        
+                        if order.isbuy():
+                             if creation_size >= 0:
+                                 action = "买入开仓" if creation_size == 0 else "买入加仓"
+                                 is_entry = True
+                             elif creation_size < 0:
+                                 action = "反手做多"
+                                 is_entry = True
+                        else:
+                             if creation_size <= 0:
+                                 action = "卖出开仓" if creation_size == 0 else "卖出加空"
+                                 is_entry = True
+                             elif creation_size > 0:
+                                 action = "反手做空"
+                                 is_entry = True
+
+                        if is_entry:
+                             # 价格处理
+                             price = order.created.price
+                             if order.exectype == bt.Order.Market or price is None or price == 0:
+                                 price = self.datas[0].close[0]
+                             
+                             self.signals.append({
+                                 "date": dt_str,
+                                 "action": action + "(信号)",
+                                 "price": price,
+                                 "bar_index": creation_idx # 使用创建时的 index
+                             })
+                
+                if hasattr(super(), 'stop'):
+                    super().stop()
+
+        results = []
+        
+        # Handle optimal_entry
+        use_optimal_entry = strategy_params.pop('optimal_entry', False)
+        
+        # 强制禁用自动平仓，避免产生虚假信号
+        strategy_params['disable_auto_close'] = True
+        
+        filtered_strategy_params = self._filter_params(StrategyClass, strategy_params)
+        
+        # 足够的数据以覆盖扫描窗口和指标预热
+        # 假设 N=100, 预热=100 -> 200天
+        # 默认取 365 天比较稳妥
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=max(365, scan_window * 2))).strftime('%Y-%m-%d')
+
+        for symbol in symbols:
+            try:
+                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type)
+                if df is not None:
+                    df.columns = [c.lower() for c in df.columns]
+                
+                if df is None or df.empty:
+                    continue
+
+                total_bars = len(df)
+                
+                cerebro = bt.Cerebro()
+                cerebro.check = False
+                if use_optimal_entry:
+                    cerebro.broker.set_coo(True)
+                cerebro.broker.setcash(10000000.0)
+                cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
+                
+                data = bt.feeds.PandasData(dataname=df)
+                cerebro.adddata(data)
+                
+                cerebro.addstrategy(ScanStrategy, **filtered_strategy_params)
+                strats = cerebro.run()
+                if not strats:
+                    continue
+                
+                strat = strats[0]
+                
+                # 筛选最近 scan_window 内的信号
+                # 这里的 bar_index 是基于 1-based (len(self))
+                
+                valid_signals = []
+                seen_dates = set()
+                
+                # 倒序遍历，优先处理最新的信号
+                for sig in sorted(strat.signals, key=lambda x: x['bar_index'], reverse=True):
+                    offset = total_bars - sig['bar_index'] + 1
+                    
+                    if offset <= scan_window:
+                        # 同一日期只保留一个信号（通常是成交信号或最新的挂单信号）
+                        if sig['date'] in seen_dates:
+                            continue
+                            
+                        valid_signals.append({
+                            "date": sig['date'],
+                            "action": sig['action'],
+                            "offset": offset, 
+                            "price": sig['price']
+                        })
+                        seen_dates.add(sig['date'])
+                
+                # 重新排序回正序（前端展示需要）
+                valid_signals.sort(key=lambda x: x['offset'], reverse=True)
+                
+                # 获取当前价格
+                current_price = df['close'].iloc[-1] if not df.empty else 0.0
+
+                results.append({
+                    "symbol": symbol,
+                    "name": symbol, 
+                    "signal_text": "有" if valid_signals else "无",
+                    "raw_signals": valid_signals,
+                    "current_price": current_price
+                })
+                
+            except Exception as e:
+                print(f"Error scanning {symbol}: {e}")
                 results.append({
                     "symbol": symbol,
                     "error": str(e)

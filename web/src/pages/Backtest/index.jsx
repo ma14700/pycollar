@@ -506,11 +506,14 @@ const BacktestPage = () => {
                                     onChange={onSymbolChange}
                                     showSearch
                                     mode="multiple"
-                                    placeholder="选择或搜索品种"
-                                    optionFilterProp="children"
-                                    filterOption={(input, option) =>
-                                        option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
-                                    }
+                                    maxTagCount="responsive"
+                                    placeholder="选择或搜索品种 (支持多选)"
+                                    filterOption={(input, option) => {
+                                        const children = option.children ? option.children.toString().toLowerCase() : '';
+                                        const value = option.value ? option.value.toString().toLowerCase() : '';
+                                        const inputLower = input.toLowerCase();
+                                        return children.includes(inputLower) || value.includes(inputLower);
+                                    }}
                                     >
                                     {symbols.map(s => (
                                         <Option key={s.code} value={s.code}>{s.name}</Option>
