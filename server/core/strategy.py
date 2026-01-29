@@ -656,7 +656,7 @@ class MA55TouchExitStrategy(BaseStrategy):
 
 class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     """
-    20/55 双均线 + 盈利平半仓
+    20/55 双均线 + 盈利平半仓 (使用 Limit 单)
     """
     params = (
         ('take_profit_points', 50.0),
@@ -664,31 +664,51 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     
     def __init__(self):
         super().__init__()
-        self.tp_executed = False
-        self.entry_price = 0.0
+        self.tp_order = None
 
     def notify_order(self, order):
         BaseStrategy.notify_order(self, order)
-        if order.status == order.Completed:
-            if abs(self.position.size) >= self.params.fixed_size:
-                self.tp_executed = False
-                self.entry_price = order.executed.price
-
-    def next(self):
-        super().next()
         
-        # 如果是最后两根K线（已在pre_next处理平仓或跳过），则停止后续逻辑
-        if len(self.datas[0]) >= self.datas[0].buflen() - 1:
+        # 检查止盈单状态
+        if self.tp_order and order.ref == self.tp_order.ref:
+            if order.status == order.Completed:
+                self.log(f'Partial TP Completed: Price {order.executed.price:.2f}, Size {order.executed.size}')
+                self.tp_order = None
+            elif order.status in [order.Canceled, order.Rejected, order.Margin]:
+                self.tp_order = None
             return
 
-        if self.position.size != 0 and not self.tp_executed:
-            profit = 0
-            if self.position.size > 0:
-                profit = self.data.close[0] - self.entry_price
-            else:
-                profit = self.entry_price - self.data.close[0]
+        # 检查主订单成交，挂止盈单
+        if order.status == order.Completed:
+            # 如果没有 TP 单，且持仓不为0
+            if not self.tp_order and self.position.size != 0:
+                self.place_partial_tp()
+
+    def place_partial_tp(self):
+        # 计算目标价格 (基于持仓均价)
+        avg_price = self.position.price
+        
+        # 计算平仓数量 (半仓)
+        size = abs(self.position.size) / 2.0
+        
+        # 避免手数太小 (可选: 如果小于 0.01 则不操作? 但为了通用性先保留)
+        if size == 0: return
+
+        target_price = 0
+        if self.position.size > 0:
+            target_price = avg_price + self.params.take_profit_points
+            self.tp_order = self.sell(size=size, price=target_price, exectype=bt.Order.Limit)
+        else:
+            target_price = avg_price - self.params.take_profit_points
+            self.tp_order = self.buy(size=size, price=target_price, exectype=bt.Order.Limit)
             
-            if profit >= self.params.take_profit_points:
-                self.log(f'Partial TP: {profit:.2f}')
-                self.close(size=self.position.size / 2)
-                self.tp_executed = True
+        self.log(f'Placed Partial TP Limit Order: Price {target_price:.2f}, Size {size}')
+
+    def next(self):
+        # 如果有交叉信号，先取消现有的 TP 单，因为可能要反手
+        if self.crossover > 0 or self.crossover < 0:
+            if self.tp_order:
+                self.cancel(self.tp_order)
+                self.tp_order = None
+        
+        super().next()

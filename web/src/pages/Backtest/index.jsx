@@ -234,8 +234,8 @@ const BacktestPage = () => {
         };
       } else if (strategyType === 'MA20MA55PartialTakeProfitStrategy') {
         params = {
-            fast_period: 20,
-            slow_period: 55,
+            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
