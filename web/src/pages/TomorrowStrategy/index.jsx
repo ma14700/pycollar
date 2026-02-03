@@ -109,7 +109,8 @@ const TomorrowStrategy = () => {
                 data_source: 'main',
                 // 关键修正：确保详情回测的时间范围与批量分析完全一致（最近365天）
                 // 否则数据起点不同会导致指标计算差异，进而导致信号不一致
-                start_date: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+                // 2024-05 Update: 针对周线模式，需要拉取更长的数据（3年），否则K线太少
+                start_date: new Date(Date.now() - (values.period === 'weekly' ? 1095 : 365) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
             };
             
             const res = await axios.post('http://localhost:8000/api/backtest', payload);
@@ -303,6 +304,7 @@ const TomorrowStrategy = () => {
                             <Form.Item name="period" label="K线周期">
                                 <Select>
                                     <Option value="daily">日线</Option>
+                                    <Option value="weekly">周线</Option>
                                     <Option value="60">60分钟</Option>
                                     <Option value="30">30分钟</Option>
                                     <Option value="15">15分钟</Option>

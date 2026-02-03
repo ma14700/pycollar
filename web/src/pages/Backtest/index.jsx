@@ -631,6 +631,7 @@ const BacktestPage = () => {
                 <Form.Item label="回测周期" name="period">
                     <Select>
                     <Option value="daily">日线</Option>
+                    <Option value="weekly">周线</Option>
                     <Option value="60">60分钟</Option>
                     <Option value="30">30分钟</Option>
                     <Option value="15">15分钟</Option>
