@@ -398,7 +398,11 @@ class BacktestEngine:
                                 # 2. Calculate Pct using Net PnL (pnl_val)
                                 profit_per_hand_net = pnl_val / exec_size
                                 pct = (profit_per_hand_net / implied_entry)
-                                pnl_str += f", 收益率: {pct:.2f}%"
+                                pnl_str += f", 收益率: {pct*100:.2f}%"
+                                
+                                # Accumulate
+                                self.accum_profit_per_hand += profit_per_hand_net
+                                self.accum_profit_pct += pct
                         except Exception:
                             pass
 

@@ -712,3 +712,12 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
                 self.tp_order = None
         
         super().next()
+
+# --- 动态导入新策略 ---
+# 为了保持 engine.py 的零侵入性，我们在 strategy 模块末尾导入新策略
+# 这样 getattr(strategy, 'MA5MA55CrossoverStrategy') 就能找到它
+try:
+    from .ma5_55_cross import MA5MA55CrossoverStrategy
+except ImportError:
+    pass
+

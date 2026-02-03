@@ -71,7 +71,7 @@ const BatchBacktestResult = ({ results, symbols = [], isFullScreen, onToggleFull
                       净利: {metrics.net_profit?.toLocaleString()}
                     </Tag>
                     <Tag color={metrics.net_profit > 0 ? 'red' : 'green'}>
-                      收益: {metrics.return_rate?.toFixed(2)}%
+                      收益: {(metrics.one_hand_profit_pct !== undefined && metrics.one_hand_profit_pct !== null) ? metrics.one_hand_profit_pct.toFixed(2) : metrics.return_rate?.toFixed(2)}%
                     </Tag>
                     <Tag>回撤: {metrics.max_drawdown?.toFixed(2)}%</Tag>
                   </>
