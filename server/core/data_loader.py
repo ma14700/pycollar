@@ -13,13 +13,13 @@ def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_dat
     
     df = None
     try:
-        # 处理日线数据
-        if period == 'daily':
+        # 处理日线/周线/月线数据
+        if period in ['daily', 'weekly', 'monthly']:
             # 优先尝试 AkShare 股票日线接口: stock_zh_a_hist (东方财富)
             # symbol 需要是 6 位代码，去掉前缀
             code = symbol[-6:]
             try:
-                df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="19900101", end_date="20500101", adjust=adjust)
+                df = ak.stock_zh_a_hist(symbol=code, period=period, start_date="19900101", end_date="20500101", adjust=adjust)
                 
                 # 清洗 (东方财富返回中文列名)
                 df.rename(columns={
@@ -31,20 +31,23 @@ def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_dat
                     '成交量': 'Volume'
                 }, inplace=True)
             except Exception as e_hist:
-                print(f"东方财富接口(stock_zh_a_hist)调用失败，尝试新浪接口: {e_hist}")
-                # Fallback: AkShare 股票日线接口: stock_zh_a_daily (新浪)
-                # symbol 需要带前缀
-                df = ak.stock_zh_a_daily(symbol=symbol, start_date="19900101", end_date="20500101", adjust=adjust)
-                
-                # 清洗 (新浪返回英文小写列名)
-                df.rename(columns={
-                    'date': 'date',
-                    'open': 'Open',
-                    'high': 'High',
-                    'low': 'Low',
-                    'close': 'Close',
-                    'volume': 'Volume'
-                }, inplace=True)
+                if period == 'daily':
+                    print(f"东方财富接口(stock_zh_a_hist)调用失败，尝试新浪接口: {e_hist}")
+                    # Fallback: AkShare 股票日线接口: stock_zh_a_daily (新浪)
+                    # symbol 需要带前缀
+                    df = ak.stock_zh_a_daily(symbol=symbol, start_date="19900101", end_date="20500101", adjust=adjust)
+                    
+                    # 清洗 (新浪返回英文小写列名)
+                    df.rename(columns={
+                        'date': 'date',
+                        'open': 'Open',
+                        'high': 'High',
+                        'low': 'Low',
+                        'close': 'Close',
+                        'volume': 'Volume'
+                    }, inplace=True)
+                else:
+                    raise e_hist
             
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
@@ -136,6 +139,31 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
     
     df = None
     try:
+        # 处理周线数据请求 (通过日线 Resample)
+        if period == 'weekly':
+            print("周线数据：正在获取日线数据并进行重采样...")
+            df_daily = fetch_futures_data(symbol=symbol, period='daily', start_date=start_date, end_date=end_date, data_source=data_source)
+            
+            if df_daily is not None and not df_daily.empty:
+                # Resample logic
+                # Rule: W-FRI means weekly frequency ending on Friday
+                logic = {
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum',
+                    'OpenInterest': 'last'
+                }
+                # 使用 'W-FRI' 以匹配国内期货交易周习惯 (周五结束)
+                # 注意：如果数据中有周六日交易（极少），可能会归到下一周
+                df = df_daily.resample('W-FRI').agg(logic)
+                df.dropna(inplace=True) # 去除可能产生的空行
+                print(f"成功将日线数据重采样为 {len(df)} 条周线数据")
+                return df
+            else:
+                return None
+
         # 处理日线数据请求
         if period == 'daily':
             # AkShare 获取期货日线数据接口: futures_zh_daily_sina

@@ -667,7 +667,6 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
         self.tp_order = None
 
     def notify_order(self, order):
-        BaseStrategy.notify_order(self, order)
         
         # 检查止盈单状态
         if self.tp_order and order.ref == self.tp_order.ref:
@@ -676,14 +675,12 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
                 self.tp_order = None
             elif order.status in [order.Canceled, order.Rejected, order.Margin]:
                 self.tp_order = None
-            return
 
         # 检查主订单成交，挂止盈单
         if order.status == order.Completed:
             # 如果没有 TP 单，且持仓不为0
             if not self.tp_order and self.position.size != 0:
                 self.place_partial_tp()
-
     def place_partial_tp(self):
         # 计算目标价格 (基于持仓均价)
         avg_price = self.position.price

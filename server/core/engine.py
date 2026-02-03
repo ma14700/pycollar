@@ -460,6 +460,12 @@ class BacktestEngine:
                         warmup_days = max(warmup_days, slow_p * 3)
                     except:
                         pass
+                
+                # 如果是周线，需要大幅增加预热天数 (一周7天，放大倍数)
+                if period == 'weekly':
+                    warmup_days = warmup_days * 7
+                    print(f"检测到周线模式，自动放大预热天数至: {warmup_days} 天")
+
                 req_dt = pd.to_datetime(start_date)
                 fetch_start_dt = req_dt - pd.Timedelta(days=warmup_days)
                 fetch_start_date = fetch_start_dt.strftime('%Y-%m-%d')
@@ -490,8 +496,15 @@ class BacktestEngine:
             return {"error": "未找到该品种的数据，请检查代码或日期范围"}
             
         # 转换 timeframe
-        timeframe = bt.TimeFrame.Days if period == 'daily' else bt.TimeFrame.Minutes
-        compression = 1 if period == 'daily' else int(period)
+        if period == 'weekly':
+            timeframe = bt.TimeFrame.Weeks
+            compression = 1
+        elif period == 'daily':
+            timeframe = bt.TimeFrame.Days
+            compression = 1
+        else:
+            timeframe = bt.TimeFrame.Minutes
+            compression = int(period)
         
         # 检查数据列
         if 'OpenInterest' not in df_raw.columns and 'hold' in df_raw.columns:
@@ -983,6 +996,15 @@ class BacktestEngine:
                 cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
 
                 data = bt.feeds.PandasData(dataname=df)
+                
+                # 针对周线，显式设置 TimeFrame
+                if period == 'weekly':
+                    # 虽然数据已经是周线（Resampled），但为了保险，告诉 Cerebro 这是周线数据
+                    # 不过如果 compression=1, timeframe=Weeks，Cerebro 会认为这是周线
+                    # 关键是数据已经是周频了，所以 timeframe=Weeks, compression=1 是匹配的
+                    # 如果不设置，默认是 Daily? PandasData 不会自动推断 TimeFrame
+                    data = bt.feeds.PandasData(dataname=df, timeframe=bt.TimeFrame.Weeks, compression=1)
+                
                 cerebro.adddata(data)
                 
                 # 添加策略
