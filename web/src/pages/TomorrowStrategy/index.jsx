@@ -199,7 +199,17 @@ const TomorrowStrategy = () => {
                 return item ? item.name : text;
             }
         },
-        { title: '最新价格', dataIndex: 'price', key: 'price' },
+        { 
+            title: '最新价格', 
+            dataIndex: 'price', 
+            key: 'price',
+            render: (text, record) => {
+                if (record.error) {
+                    return <Tooltip title={record.error}><span style={{color: 'red'}}>Error</span></Tooltip>;
+                }
+                return text;
+            }
+        },
         { 
             title: '持仓方向', 
             dataIndex: 'direction', 
@@ -219,6 +229,18 @@ const TomorrowStrategy = () => {
             }
         },
         { title: '上次开仓价', dataIndex: 'entry_price', key: 'entry_price' },
+        {
+            title: '持有K线数',
+            dataIndex: 'hold_bars',
+            key: 'hold_bars',
+            render: (text, record) => {
+                if (!record.size || record.size === 0) return '-';
+                
+                // 多单红色，空单绿色
+                const color = record.size > 0 ? '#f5222d' : '#52c41a';
+                return <span style={{ color, fontWeight: 'bold' }}>{text}</span>;
+            }
+        },
         {
             title: '盈利点数',
             dataIndex: 'profit_points',

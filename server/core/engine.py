@@ -915,6 +915,7 @@ class BacktestEngine:
         class BatchStrategy(StrategyClass):
             def __init__(self):
                 self.last_entry_price = "-"
+                self.last_entry_bar_idx = -1 # 记录开仓时的 bar 索引
                 super().__init__()
 
             def notify_order(self, order):
@@ -922,6 +923,12 @@ class BacktestEngine:
                     # 如果有持仓，记录开仓均价
                     if self.position.size != 0:
                         self.last_entry_price = self.position.price
+                        # 记录当前开仓的 bar 索引 (len(self) 返回当前已处理的 bar 数)
+                        # 注意：notify_order 在 bar 结束后触发，此时 len(self) 指向刚结束的 bar
+                        self.last_entry_bar_idx = len(self)
+                    else:
+                        self.last_entry_bar_idx = -1 # 平仓重置
+
                 super().notify_order(order)
             
             def pre_next(self):
@@ -945,6 +952,14 @@ class BacktestEngine:
             def stop(self):
                 # 记录最终状态
                 self.final_size = self.position.size
+                # 计算持有 K 线数
+                # 当前总 bar 数 = len(self)
+                # 持有数 = 当前 - 开仓时
+                if self.position.size != 0 and self.last_entry_bar_idx > 0:
+                    self.hold_bars = len(self) - self.last_entry_bar_idx
+                else:
+                    self.hold_bars = 0
+                
                 if self.position.size != 0:
                     self.final_entry_price = self.position.price
                 else:
@@ -1023,6 +1038,7 @@ class BacktestEngine:
                 # 判断方向
                 size = getattr(strat, 'final_size', 0)
                 entry_price = getattr(strat, 'final_entry_price', "-")
+                hold_bars = getattr(strat, 'hold_bars', 0)
                 
                 direction = "空仓"
                 color = "default" # default/green/red
@@ -1046,7 +1062,8 @@ class BacktestEngine:
                     "direction": direction,
                     "entry_price": entry_price,
                     "size": size,
-                    "profit_points": profit_points if size != 0 else "-"
+                    "profit_points": profit_points if size != 0 else "-",
+                    "hold_bars": hold_bars
                 })
                 
             except Exception as e:
@@ -1055,7 +1072,11 @@ class BacktestEngine:
                 print(f"Error analyzing {symbol}: {e}")
                 results.append({
                     "symbol": symbol,
-                    "error": str(e)
+                    "error": str(e),
+                    "price": 0, # 填充默认值防止前端空白
+                    "direction": "Error",
+                    "entry_price": "-",
+                    "profit_points": "-"
                 })
         
         return results
