@@ -1051,7 +1051,11 @@ class BacktestEngine:
                 print(f"Error analyzing {symbol}: {e}")
                 results.append({
                     "symbol": symbol,
-                    "error": str(e)
+                    "error": str(e),
+                    "price": 0, # 填充默认值防止前端空白
+                    "direction": "Error",
+                    "entry_price": "-",
+                    "profit_points": "-"
                 })
         
         return results

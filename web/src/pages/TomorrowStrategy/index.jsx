@@ -199,7 +199,17 @@ const TomorrowStrategy = () => {
                 return item ? item.name : text;
             }
         },
-        { title: '最新价格', dataIndex: 'price', key: 'price' },
+        { 
+            title: '最新价格', 
+            dataIndex: 'price', 
+            key: 'price',
+            render: (text, record) => {
+                if (record.error) {
+                    return <Tooltip title={record.error}><span style={{color: 'red'}}>Error</span></Tooltip>;
+                }
+                return text;
+            }
+        },
         { 
             title: '持仓方向', 
             dataIndex: 'direction', 
