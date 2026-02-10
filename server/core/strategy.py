@@ -715,6 +715,7 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
 # 这样 getattr(strategy, 'MA5MA55CrossoverStrategy') 就能找到它
 try:
     from .ma5_55_cross import MA5MA55CrossoverStrategy
+    from .ma20_60_cross import MA20MA60CrossoverStrategy
 except ImportError:
     pass
 
