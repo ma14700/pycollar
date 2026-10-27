@@ -102,7 +102,14 @@ def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_dat
         traceback.print_exc()
         return None
 
-def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_date=None, data_source='main'):
+def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_date=None, data_source='main', data_provider='akshare'):
+    if data_provider == 'tqsdk':
+        if market_type != 'futures':
+            raise ValueError('天勤免费版在本平台仅支持期货，请切换原有来源获取股票数据')
+        from .tq_provider import fetch_tq_data
+        return fetch_tq_data(symbol, period, start_date, end_date, data_source)
+    if data_provider != 'akshare':
+        raise ValueError('不支持的行情供应商')
     if market_type == 'stock':
         return fetch_stock_data(symbol, period, start_date, end_date)
     else:

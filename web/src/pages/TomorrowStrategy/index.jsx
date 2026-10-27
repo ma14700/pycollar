@@ -3,6 +3,8 @@ import { Card, Form, Input, Select, Button, Row, Col, message, Table, Modal, Tag
 import { PlayCircleOutlined, LineChartOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import ChartPanel from '../../components/ChartPanel';
+import DataProviderSelect from '../../components/DataProviderSelect';
+import DataSourceInfo from '../../components/DataSourceInfo';
 
 const { Option } = Select;
 
@@ -53,6 +55,9 @@ const TomorrowStrategy = () => {
         const list = val === 'stock' ? stockList : futuresList;
         setSymbols(list || []);
         form.setFieldsValue({ symbols: [] });
+        if (val === 'stock') form.setFieldsValue({ data_provider: 'akshare', data_source: 'main' });
+        else form.setFieldsValue({ data_provider: 'tqsdk' });
+        setResults([]);
     };
 
     const onFinish = async (values) => {
@@ -64,18 +69,26 @@ const TomorrowStrategy = () => {
             delete params.market_type;
             delete params.period;
             delete params.strategy_name;
+            delete params.data_provider;
+            delete params.data_source;
 
             const payload = {
                 symbols: values.symbols,
                 period: values.period,
                 market_type: values.market_type,
                 strategy_name: values.strategy_name,
-                strategy_params: params
+                strategy_params: params,
+                data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
+                data_source: values.data_source || 'main'
             };
 
             const res = await axios.post('http://localhost:8000/api/strategy/batch-analyze', payload);
-            setResults(res.data.results || []);
-            message.success('分析完成');
+            const rows = res.data.results || [];
+            setResults(rows);
+            const errors = rows.filter(row => row.error);
+            if (errors.length === rows.length && errors.length) message.error(errors[0].error);
+            else if (errors.length) message.warning(`分析完成，${errors.length} 个品种取数失败，请查看行情状态`);
+            else message.success('分析完成');
         } catch (err) {
             console.error(err);
             message.error('分析失败: ' + (err.response?.data?.detail || err.message));
@@ -97,6 +110,8 @@ const TomorrowStrategy = () => {
             delete params.market_type;
             delete params.period;
             delete params.strategy_name;
+            delete params.data_provider;
+            delete params.data_source;
 
             const payload = {
                 symbol: record.symbol,
@@ -106,10 +121,10 @@ const TomorrowStrategy = () => {
                 strategy_params: params,
                 initial_cash: 10000000, // 与 analyze_batch 保持一致
                 auto_optimize: false,
-                data_source: 'main',
-                // 关键修正：确保详情回测的时间范围与批量分析完全一致（最近365天）
-                // 否则数据起点不同会导致指标计算差异，进而导致信号不一致
-                start_date: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+                data_provider: record.data_info?.provider || values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
+                data_source: record.data_info?.data_source || values.data_source || 'main',
+                // 天勤沿用近期窗口，原有来源沿用最近 365 天。
+                start_date: (record.data_info?.provider || values.data_provider) === 'tqsdk' ? undefined : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
             };
             
             const res = await axios.post('http://localhost:8000/api/backtest', payload);
@@ -219,6 +234,12 @@ const TomorrowStrategy = () => {
         },
         { title: '上次开仓价', dataIndex: 'entry_price', key: 'entry_price' },
         {
+            title: '行情状态', key: 'data_status',
+            render: (_, record) => record.error
+                ? <Tooltip title={record.error}><Tag color="error">取数失败</Tag></Tooltip>
+                : <Tooltip title={record.data_info?.end}><Tag>{record.data_info?.provider_name || '原有行情'}</Tag></Tooltip>,
+        },
+        {
             title: '操作',
             key: 'action',
             render: (_, record) => (
@@ -241,7 +262,11 @@ const TomorrowStrategy = () => {
                                     <Option value="stock">股票</Option>
                                 </Select>
                             </Form.Item>
-                            
+                            <DataProviderSelect form={form} />
+                            <Form.Item name="data_source" label="合约口径" initialValue="main">
+                                <Select options={[{ value: 'main', label: '主力连续' }, { value: 'weighted', label: '加权指数' }]} />
+                            </Form.Item>
+
                             <Form.Item 
                                 name="symbols" 
                                 label="交易品种 (多选)" 
@@ -359,7 +384,10 @@ const TomorrowStrategy = () => {
                 style={{ top: 20 }}
             >
                 {detailLoading ? <p>加载中...</p> : (
-                    <ChartPanel chartType="kline" results={detailResult} />
+                    <>
+                        <DataSourceInfo info={detailResult?.data_info} />
+                        <ChartPanel chartType="kline" results={detailResult} />
+                    </>
                 )}
             </Modal>
         </div>

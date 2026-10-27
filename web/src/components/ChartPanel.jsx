@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactECharts from 'echarts-for-react';
+import { getProfitDistributionOption } from '../utils/profitDistribution';
+import { buildMovingAverageSeries } from '../utils/chartMovingAverages';
 
 const ChartPanel = ({ chartType, results, onChartClick }) => {
     if (!results) return null;
@@ -14,21 +16,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
     const getOption = () => {
         // 饼图逻辑
         if (chartType === 'pie') {
-            const metrics = results.metrics || {};
-            const win = metrics.win_rate || 0;
-            const loss = 1 - win;
-            return {
-                title: { text: '盈亏分布', left: 'center' },
-                tooltip: { trigger: 'item' },
-                series: [{
-                    type: 'pie',
-                    radius: '50%',
-                    data: [
-                        { value: win, name: '盈利交易' },
-                        { value: loss, name: '亏损交易' }
-                    ]
-                }]
-            };
+            return getProfitDistributionOption(results.metrics);
         }
 
         const data = results;
@@ -76,7 +64,6 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
             };
         }
 
-        const maData = klineObj.ma || {};
         const dkxData = klineObj.dkx || {};
         // 兼容 signals 或 trades 字段
         const signals = data.signals || data.trades || [];
@@ -85,8 +72,8 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
         // 构建数据系列
         const seriesList = [];
         const legendData = ['K线', 'DKX', 'MADKX', '资金曲线'];
-        if (!maData.strategy_fast) legendData.push('MA20');
-        if (!maData.strategy_slow) legendData.push('MA55');
+        const movingAverages = buildMovingAverageSeries(klineObj);
+        legendData.push(...movingAverages.map(line => line.name));
         
         // 预处理有效日期集合，用于过滤不在当前时间范围内的信号
         const validDatesSet = new Set(dates);
@@ -142,53 +129,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
             }
         });
 
-        // 均线
-        // 优先展示策略自定义均线
-        if (maData.strategy_fast) {
-            const name = maData.strategy_fast_label || 'Fast MA';
-            legendData.push(name);
-            seriesList.push({
-                name: name,
-                type: 'line',
-                data: maData.strategy_fast,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1.5, color: '#ff7f50' }
-            });
-        } else if (maData.ma20) {
-            // 只有在没有自定义策略均线时才显示默认的 MA20
-            seriesList.push({
-                name: 'MA20',
-                type: 'line',
-                data: maData.ma20,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1, color: '#ff7f50' }
-            });
-        }
-
-        if (maData.strategy_slow) {
-            const name = maData.strategy_slow_label || 'Slow MA';
-            legendData.push(name);
-            seriesList.push({
-                name: name,
-                type: 'line',
-                data: maData.strategy_slow,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1.5, color: '#87cefa' }
-            });
-        } else if (maData.ma55) {
-             // 只有在没有自定义策略均线时才显示默认的 MA55
-            seriesList.push({
-                name: 'MA55',
-                type: 'line',
-                data: maData.ma55,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1, color: '#87cefa' }
-            });
-        }
+        seriesList.push(...movingAverages);
 
         // DKX
         if (dkxData.dkx) {
@@ -293,6 +234,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
                 selected: {
                     'MA20': true,
                     'MA55': true,
+                    'MA144': true,
                     'DKX': true,
                     'MADKX': true
                 }

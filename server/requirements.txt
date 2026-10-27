@@ -6,3 +6,5 @@ backtrader
 pandas
 matplotlib
 akshare
+tqsdk>=3.8,<4
+python-dotenv>=1,<2

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, Form, Input, Select, Button, Row, Col, message, Radio, Alert, Switch, Tag, DatePicker, Tooltip } from 'antd';
 import { 
   SafetyCertificateOutlined, 
@@ -13,6 +13,8 @@ import ContractInfo from '../../components/ContractInfo';
 import MetricsPanel from '../../components/MetricsPanel';
 import ChartPanel from '../../components/ChartPanel';
 import { useBacktest } from '../../context/BacktestContext';
+import DataProviderSelect from '../../components/DataProviderSelect';
+import DataSourceInfo from '../../components/DataSourceInfo';
 
 const { Option } = Select;
 
@@ -23,6 +25,7 @@ const BacktestPage = () => {
   const [form] = Form.useForm();
   const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
+  const quoteRequestId = useRef(0);
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);
   
@@ -50,7 +53,7 @@ const BacktestPage = () => {
             const marketType = savedFormValues.market_type || 'futures';
             const list = marketType === 'stock' ? sList : fList;
             setSymbols(list || []);
-            form.setFieldsValue(savedFormValues);
+            form.setFieldsValue({ ...savedFormValues, data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') });
             if (savedFormValues.symbol) {
                 fetchQuote(savedFormValues.symbol);
             }
@@ -96,17 +99,20 @@ const BacktestPage = () => {
     }
   };
 
-  const fetchQuote = (symbol) => {
+  const fetchQuote = (symbol, overrides = {}) => {
     if (!symbol) return;
+    const requestId = ++quoteRequestId.current;
+    setQuoteInfo(null);
     const marketType = form.getFieldValue('market_type') || 'futures';
-    const dataSource = form.getFieldValue('data_source') || 'main';
-    axios.get(`http://localhost:8000/api/quote/latest?symbol=${symbol}&market_type=${marketType}&data_source=${dataSource}`)
+    const dataSource = overrides.data_source || form.getFieldValue('data_source') || 'main';
+    const dataProvider = overrides.data_provider || form.getFieldValue('data_provider') || (marketType === 'stock' ? 'akshare' : 'tqsdk');
+    axios.get('http://localhost:8000/api/quote/latest', { params: { symbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
       .then(res => {
-        setQuoteInfo(res.data);
+        if (requestId === quoteRequestId.current) setQuoteInfo(res.data);
       })
       .catch(err => {
         console.error("Failed to fetch quote", err);
-        setQuoteInfo(null);
+        if (requestId === quoteRequestId.current) setQuoteInfo(null);
       });
   };
 
@@ -286,6 +292,7 @@ const BacktestPage = () => {
         period: values.period,
         market_type: values.market_type || 'futures',
         data_source: values.data_source || 'main',
+        data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
         strategy_params: params,
         initial_cash: parseFloat(values.initial_cash || 1000000),
         auto_optimize: autoOptimize,
@@ -374,7 +381,9 @@ const BacktestPage = () => {
                     <Select onChange={(val) => {
                         form.setFieldsValue({ symbol: undefined });
                         if (val === 'stock') {
-                            form.setFieldsValue({ data_source: 'main' });
+                            form.setFieldsValue({ data_source: 'main', data_provider: 'akshare' });
+                        } else {
+                            form.setFieldsValue({ data_provider: 'tqsdk' });
                         }
                         switchSymbols(val);
                     }}>
@@ -383,14 +392,16 @@ const BacktestPage = () => {
                     </Select>
                 </Form.Item>
 
+                <DataProviderSelect form={form} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_provider: value })} />
+
                 <Form.Item 
                     name="data_source" 
-                    label="数据源" 
+                    label="合约口径"
                     initialValue="main"
                     tooltip="选择'主力连续'将使用主力合约拼接数据；选择'加权指数'将使用加权指数数据(如可用)"
                     shouldUpdate={(prev, curr) => prev.market_type !== curr.market_type}
                 >
-                    <Select disabled={form.getFieldValue('market_type') === 'stock'}>
+                    <Select disabled={form.getFieldValue('market_type') === 'stock'} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_source: value })}>
                     <Option value="main">主力连续</Option>
                     <Option value="weighted">加权指数</Option>
                     </Select>
@@ -839,6 +850,7 @@ const BacktestPage = () => {
             <Col span={18} style={{ height: '100%', overflowY: 'auto' }}>
             {results ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <DataSourceInfo info={results.data_info} />
                 {results.optimization_info?.triggered && (
                     <Alert
                         message="策略已自动优化"

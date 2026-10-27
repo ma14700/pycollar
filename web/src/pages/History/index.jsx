@@ -10,6 +10,7 @@ import { strategyNameMap, periodMap } from '../../constants';
 import { getSymbolName, parseLogItem } from '../../utils';
 import MetricsPanel from '../../components/MetricsPanel';
 import ChartPanel from '../../components/ChartPanel';
+import DataSourceInfo from '../../components/DataSourceInfo';
 
 const HistoryPage = () => {
   const [savedBacktests, setSavedBacktests] = useState([]);
@@ -104,6 +105,7 @@ const HistoryPage = () => {
                         </Descriptions>
                     </Card>
                 )}
+                <DataSourceInfo info={viewingHistory.detail_data?.data_info} />
                 
                 <MetricsPanel metrics={viewingHistory.metrics || (viewingHistory.detail_data && viewingHistory.detail_data.metrics)} />
 

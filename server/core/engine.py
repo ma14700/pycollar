@@ -29,7 +29,8 @@ class BacktestEngine:
         
         return valid_params
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main'):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare'):
+        strategy_params = strategy_params.copy()
         print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
         importlib.reload(strategy)
@@ -423,7 +424,7 @@ class BacktestEngine:
             # 这样可以防止因数据过短导致指标无法计算
             fetch_start_date = start_date
             if start_date:
-                warmup_days = 150
+                warmup_days = 432 if period == 'daily' else 150
                 if 'slow_period' in strategy_params:
                     try:
                         slow_p = int(strategy_params['slow_period'])
@@ -440,13 +441,15 @@ class BacktestEngine:
             strategy_params['start_date'] = start_date
             strategy_params['end_date'] = end_date # 注入结束日期，用于强制平仓
 
-            df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source)
+            df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source, data_provider=data_provider)
             
             # 检查数据是否被截断 (数据源起始时间晚于请求时间 2 天以上)
             if start_date and df_raw is not None and not df_raw.empty:
                 req_start = pd.to_datetime(start_date)
                 data_start = df_raw.index.min()
                 if data_start > req_start + pd.Timedelta(days=5): # 放宽到5天
+                    if data_provider == 'tqsdk':
+                        raise ValueError(f'天勤免费滚动窗口无法覆盖所选开始日期 {start_date}，当前最早数据为 {data_start}。请缩短范围或清空日期使用近期窗口。')
                     data_warning = f"【数据警告】数据源限制: 只能获取到 {data_start.strftime('%Y-%m-%d')} 之后的数据 (请求开始: {start_date})。免费接口通常仅提供最近约1000根K线(分钟级)。"
                     print(data_warning)
                     
@@ -718,16 +721,19 @@ class BacktestEngine:
             "volumes": df_kline['Volume'].tolist() if 'Volume' in df_kline.columns else []
         }
         
-        close_series = df_kline['Close'].astype(float)
-        ma5 = close_series.rolling(window=5, min_periods=1).mean()
-        ma10 = close_series.rolling(window=10, min_periods=1).mean()
-        ma20 = close_series.rolling(window=20, min_periods=1).mean()
-        ma55 = close_series.rolling(window=55, min_periods=1).mean()
+        # Calculate on all available history, then align to the visible range.
+        close_series = df_raw['Close'].astype(float)
+        ma5 = close_series.rolling(window=5, min_periods=1).mean().reindex(df_kline.index)
+        ma10 = close_series.rolling(window=10, min_periods=1).mean().reindex(df_kline.index)
+        ma20 = close_series.rolling(window=20, min_periods=1).mean().reindex(df_kline.index)
+        ma55 = close_series.rolling(window=55, min_periods=1).mean().reindex(df_kline.index)
+        ma144 = close_series.rolling(window=144, min_periods=144).mean().reindex(df_kline.index)
         kline_data['ma'] = {
             "ma5": ma5.round(2).tolist(),
             "ma10": ma10.round(2).tolist(),
             "ma20": ma20.round(2).tolist(),
-            "ma55": ma55.round(2).tolist()
+            "ma55": ma55.round(2).tolist(),
+            "ma144": [round(float(value), 2) if pd.notna(value) else None for value in ma144]
         }
 
         # 策略自定义均线计算 (用于前端展示策略实际使用的均线)
@@ -738,9 +744,9 @@ class BacktestEngine:
                 is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
                 
                 if is_ema:
-                    kline_data['ma']['strategy_fast'] = close_series.ewm(span=p, adjust=False).mean().round(2).tolist()
+                    kline_data['ma']['strategy_fast'] = close_series.ewm(span=p, adjust=False).mean().reindex(df_kline.index).round(2).tolist()
                 else:
-                    kline_data['ma']['strategy_fast'] = close_series.rolling(window=p, min_periods=1).mean().round(2).tolist()
+                    kline_data['ma']['strategy_fast'] = close_series.rolling(window=p, min_periods=1).mean().reindex(df_kline.index).round(2).tolist()
                 
                 kline_data['ma']['strategy_fast_period'] = p
                 kline_data['ma']['strategy_fast_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
@@ -753,9 +759,9 @@ class BacktestEngine:
                 is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
                 
                 if is_ema:
-                    kline_data['ma']['strategy_slow'] = close_series.ewm(span=p, adjust=False).mean().round(2).tolist()
+                    kline_data['ma']['strategy_slow'] = close_series.ewm(span=p, adjust=False).mean().reindex(df_kline.index).round(2).tolist()
                 else:
-                    kline_data['ma']['strategy_slow'] = close_series.rolling(window=p, min_periods=1).mean().round(2).tolist()
+                    kline_data['ma']['strategy_slow'] = close_series.rolling(window=p, min_periods=1).mean().reindex(df_kline.index).round(2).tolist()
                 
                 kline_data['ma']['strategy_slow_period'] = p
                 kline_data['ma']['strategy_slow_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
@@ -841,6 +847,10 @@ class BacktestEngine:
 
         raw_result = {
             "status": "success",
+            "data_info": {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
+                          "provider_name": '天勤 TqSdk 免费版' if data_provider == 'tqsdk' else '原有行情',
+                          "symbol": symbol, "data_source": data_source, "period": period,
+                          "bars": len(df_kline), "start": str(df_kline.index.min()), "end": str(df_kline.index.max())},
             "equity_curve": final_equity_curve,
             "kline_data": kline_data,
             "trades": final_trades,
@@ -866,10 +876,11 @@ class BacktestEngine:
         
         return clean_data(raw_result)
 
-    def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures'):
+    def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures', data_provider='akshare', data_source='main'):
         """
         批量分析策略状态
         """
+        strategy_params = strategy_params.copy()
         importlib.reload(strategy)
         
         if not hasattr(strategy, strategy_name):
@@ -932,11 +943,13 @@ class BacktestEngine:
         
         # 默认回测最近1年数据，确保指标计算充分
         start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+        if data_provider == 'tqsdk':
+            start_date = None
 
         for symbol in symbols:
             try:
                 # 获取数据
-                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type)
+                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type, data_provider=data_provider, data_source=data_source)
                 
                 if df is not None:
                     # Ensure lowercase columns for backtrader
@@ -997,7 +1010,8 @@ class BacktestEngine:
                     "price": float(current_price),
                     "direction": direction,
                     "entry_price": entry_price,
-                    "size": size
+                    "size": size,
+                    "data_info": df.attrs.get('data_info', {"provider": data_provider, "data_source": data_source})
                 })
                 
             except Exception as e:

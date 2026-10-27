@@ -1,0 +1,17 @@
+.recent-news-page { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+.recent-news-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.recent-news-card .ant-card-head { padding: 0 20px; }
+.recent-news-card .ant-card-body { padding: 16px 20px; }
+.recent-news-subtitle { font-size: 12px; margin-bottom: 6px !important; }
+.recent-news-updated { font-size: 12px; margin-bottom: 12px !important; }
+.recent-news-item { display: flex !important; flex-direction: column; align-items: stretch !important; gap: 10px; padding: 16px 0 !important; }
+.recent-news-link { color: #262626; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.recent-news-link:hover { color: #1677ff; }
+.recent-news-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; color: #8c8c8c; font-size: 12px; }
+.recent-news-loading { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px; }
+.market-quote-panel .ant-card-head { flex-wrap: wrap; }
+.market-quote-card { background: #fafcff; height: 100%; }
+.market-quote-price { display: flex; flex-direction: column; gap: 8px; }
+.market-quote-change { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.market-quote-time { font-size: 12px; margin: 16px 0 0 !important; line-height: 1.8; }
+@media (max-width: 600px) { .recent-news-page { padding: 16px; } }

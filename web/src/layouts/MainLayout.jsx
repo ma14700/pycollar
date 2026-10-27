@@ -6,7 +6,9 @@ import {
   CodeOutlined, 
   FileTextOutlined, 
   HistoryOutlined,
-  BulbOutlined
+  BulbOutlined,
+  FundViewOutlined,
+  ReadOutlined
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -24,6 +26,8 @@ const MainLayout = () => {
     if (path === '/editor') return '2';
     if (path === '/logs') return '3';
     if (path === '/history') return '4';
+    if (path === '/candle-compare') return '6';
+    if (path === '/recent-news') return '7';
     return '1';
   };
 
@@ -43,6 +47,12 @@ const MainLayout = () => {
         break;
       case '5':
         navigate('/tomorrow-strategy');
+        break;
+      case '6':
+        navigate('/candle-compare');
+        break;
+      case '7':
+        navigate('/recent-news');
         break;
       default:
         navigate('/backtest');
@@ -80,7 +90,9 @@ const MainLayout = () => {
                         { key: '5', icon: <BulbOutlined />, label: '明日策略' },
                         { key: '2', icon: <CodeOutlined />, label: '代码编辑' },
                         { key: '3', icon: <FileTextOutlined />, label: '交易日志' },
-                        { key: '4', icon: <HistoryOutlined />, label: '回测记录' }
+                        { key: '4', icon: <HistoryOutlined />, label: '回测记录' },
+                        { key: '6', icon: <FundViewOutlined />, label: 'K线对比' },
+                        { key: '7', icon: <ReadOutlined />, label: '近期消息' }
                     ]}
                 />
             </Sider>

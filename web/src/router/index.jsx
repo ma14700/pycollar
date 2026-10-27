@@ -6,6 +6,8 @@ import EditorPage from '../pages/Editor';
 import LogsPage from '../pages/Logs';
 import HistoryPage from '../pages/History';
 import TomorrowStrategyPage from '../pages/TomorrowStrategy';
+import CandleComparePage from '../pages/CandleCompare';
+import RecentNewsPage from '../pages/RecentNews';
 
 const router = createBrowserRouter([
   {
@@ -35,6 +37,14 @@ const router = createBrowserRouter([
       {
         path: 'history',
         element: <HistoryPage />,
+      },
+      {
+        path: 'candle-compare',
+        element: <CandleComparePage />,
+      },
+      {
+        path: 'recent-news',
+        element: <RecentNewsPage />,
       },
     ],
   },

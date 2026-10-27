@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List, Literal
 from functools import lru_cache
 import uvicorn
 import sys
@@ -17,6 +17,11 @@ from core.engine import BacktestEngine
 from core.database import init_db, SessionLocal, BacktestRecord
 from core.optimizer import StrategyOptimizer
 from core.constants import get_multiplier, FUTURES_MULTIPLIERS, FUTURES_NAMES
+from core.tq_provider import provider_status, fetch_tq_quote
+from core.candle_compare import compare_market_candles
+from core.recent_news import get_recent_news
+from core.jin10_mcp import status as jin10_mcp_status
+from core.market_quotes import get_market_quotes
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -53,6 +58,53 @@ class BacktestRequest(BaseModel):
     end_date: Optional[str] = None   # 结束时间 (YYYY-MM-DD)
     strategy_name: str = "TrendFollowingStrategy"
     data_source: str = "main" # 数据来源: main (主力), weighted (加权/指数)
+    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+
+
+@app.get('/api/data/providers')
+def get_data_providers():
+    return {"tqsdk": provider_status()}
+
+
+@app.get('/api/news/recent')
+def recent_news(refresh: bool = False, provider: Literal['auto', 'eastmoney', 'google', 'jin10', 'domestic'] = 'auto'):
+    return get_recent_news(refresh=refresh, provider=provider)
+
+
+@app.get('/api/news/jin10/status')
+def get_jin10_mcp_status():
+    return jin10_mcp_status()
+
+
+@app.get('/api/market/oil-quotes', include_in_schema=False)
+@app.get('/api/market/quotes')
+def market_quotes(refresh: bool = False):
+    return get_market_quotes(refresh=refresh)
+
+
+class CandleCompareRequest(BaseModel):
+    symbol: str = Field(min_length=2, max_length=24)
+    period: Literal['daily', '1', '5', '15', '30', '60'] = 'daily'
+    data_provider: Literal['akshare', 'tqsdk'] = 'tqsdk'
+    data_source: Literal['main', 'weighted'] = 'main'
+    window_size: int = Field(default=50, ge=10, le=500)
+    top_k: int = Field(default=5, ge=1, le=20)
+    min_similarity: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
+    continuation_bars: int = Field(default=20, ge=0, le=200)
+    ma_periods: List[Literal[20, 60, 144]] = Field(default_factory=list, max_length=3)
+    target_end: Optional[str] = None
+    search_start: Optional[str] = None
+    search_end: Optional[str] = None
+
+
+@app.post('/api/candles/compare')
+def compare_candles(request: CandleCompareRequest):
+    try:
+        return compare_market_candles(**request.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    except Exception:
+        raise HTTPException(status_code=502, detail='行情对比暂时失败，请检查数据源或稍后重试') from None
 
 @lru_cache(maxsize=1)
 def get_all_stock_info():
@@ -66,7 +118,7 @@ def get_all_stock_info():
         return None
 
 @app.get("/api/symbols")
-async def get_symbols(market_type: str = 'futures'):
+def get_symbols(market_type: str = 'futures'):
     if market_type == 'futures':
         # FUTURES_NAMES is imported from core.constants
         
@@ -137,8 +189,12 @@ async def get_symbols(market_type: str = 'futures'):
         return {"error": "Invalid market_type"}
 
 @app.get("/api/quote/latest")
-async def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str = 'main'):
+def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str = 'main', data_provider: Literal['akshare', 'tqsdk'] = 'akshare'):
     try:
+        if data_provider == 'tqsdk':
+            if market_type != 'futures':
+                raise ValueError('天勤免费版在本平台仅支持期货')
+            return fetch_tq_quote(symbol, data_source)
         if market_type == 'stock':
              # 股票日线 (使用最近一年的数据以加快速度)
              start_dt = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y%m%d")
@@ -218,12 +274,16 @@ async def get_latest_quote(symbol: str, market_type: str = 'futures', data_sourc
             "price": price,
             "date": date
         }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"Error fetching quote: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/backtest")
-async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
+def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
     print(f"收到回测请求: {request.symbol}, {request.period}, {request.market_type}, {request.strategy_params}, 策略: {request.strategy_name}, 自动优化: {request.auto_optimize}, 时间段: {request.start_date} - {request.end_date}")
     engine = BacktestEngine()
     
@@ -237,7 +297,8 @@ async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
         start_date=request.start_date,
         end_date=request.end_date,
         strategy_name=request.strategy_name,
-        data_source=request.data_source
+        data_source=request.data_source,
+        data_provider=request.data_provider
     )
     
     if "error" in result:
@@ -253,6 +314,7 @@ async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
     record = BacktestRecord(
         symbol=request.symbol,
         period=request.period,
+        strategy_name=request.strategy_name,
         strategy_params=request.strategy_params,
         initial_cash=initial_cash,
         final_value=final_value,
@@ -282,7 +344,10 @@ async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
             start_date=request.start_date,
             end_date=request.end_date,
             strategy_name=request.strategy_name,
-            data_source=request.data_source
+            data_source=request.data_source,
+            data_provider=request.data_provider,
+            market_type=request.market_type,
+            initial_cash=request.initial_cash
         )
         if best_res:
              optimized_result = best_res
@@ -296,6 +361,7 @@ async def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
              opt_record = BacktestRecord(
                 symbol=request.symbol,
                 period=request.period,
+                strategy_name=request.strategy_name,
                 strategy_params=best_params,
                 initial_cash=opt_cash,
                 final_value=best_res['metrics']['final_value'],
@@ -464,18 +530,22 @@ class BatchAnalyzeRequest(BaseModel):
     market_type: str = "futures"
     strategy_params: Dict[str, Any]
     strategy_name: str = "TrendFollowingStrategy"
+    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    data_source: Literal['main', 'weighted'] = 'main'
 
 @app.post("/api/strategy/batch-analyze")
-async def batch_analyze(request: BatchAnalyzeRequest):
+def batch_analyze(request: BatchAnalyzeRequest):
     engine = BacktestEngine()
     results = engine.analyze_batch(
         symbols=request.symbols,
         period=request.period,
         strategy_params=request.strategy_params,
         strategy_name=request.strategy_name,
-        market_type=request.market_type
+        market_type=request.market_type,
+        data_provider=request.data_provider,
+        data_source=request.data_source
     )
     return {"results": results}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
