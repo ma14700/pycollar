@@ -27,7 +27,7 @@ const DataProviderSelect = ({ form, onChange }) => {
             message={status && !status.installed ? '天勤依赖尚未安装' : status && !status.configured ? '天勤账号尚未配置' : '天勤免费滚动行情'}
             description={<>
                 {status && !status.configured && <div>请先在本地 .env 中配置快期账号和密码。</div>}
-                <div>仅支持期货近期行情，最多 10000 根 K 线。结果标明实际日期范围。</div>
+                <div>仅支持期货近期行情，最多 10000 根 K 线；周线由日线合成。结果标明实际日期范围。</div>
             </>}
         />}
     </>;

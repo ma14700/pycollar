@@ -123,8 +123,8 @@ const TomorrowStrategy = () => {
                 auto_optimize: false,
                 data_provider: record.data_info?.provider || values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
                 data_source: record.data_info?.data_source || values.data_source || 'main',
-                // 天勤沿用近期窗口，原有来源沿用最近 365 天。
-                start_date: (record.data_info?.provider || values.data_provider) === 'tqsdk' ? undefined : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+                // 天勤沿用近期窗口，原有来源沿用日线最近一年、周线最近三年。
+                start_date: (record.data_info?.provider || values.data_provider) === 'tqsdk' ? undefined : new Date(Date.now() - (values.period === 'weekly' ? 1095 : 365) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
             };
             
             const res = await axios.post('http://localhost:8000/api/backtest', payload);
@@ -213,7 +213,17 @@ const TomorrowStrategy = () => {
                 return item ? item.name : text;
             }
         },
-        { title: '最新价格', dataIndex: 'price', key: 'price' },
+        {
+            title: '最新价格',
+            dataIndex: 'price',
+            key: 'price',
+            render: (text, record) => {
+                if (record.error) {
+                    return <Tooltip title={record.error}><span style={{color: 'red'}}>Error</span></Tooltip>;
+                }
+                return text;
+            }
+        },
         { 
             title: '持仓方向', 
             dataIndex: 'direction', 
@@ -238,6 +248,33 @@ const TomorrowStrategy = () => {
             render: (_, record) => record.error
                 ? <Tooltip title={record.error}><Tag color="error">取数失败</Tag></Tooltip>
                 : <Tooltip title={record.data_info?.end}><Tag>{record.data_info?.provider_name || '原有行情'}</Tag></Tooltip>,
+        },
+        {
+            title: '持有K线数',
+            dataIndex: 'hold_bars',
+            key: 'hold_bars',
+            render: (text, record) => {
+                if (!record.size || record.size === 0) return '-';
+
+                // 多单红色，空单绿色
+                const color = record.size > 0 ? '#f5222d' : '#52c41a';
+                return <span style={{ color, fontWeight: 'bold' }}>{text}</span>;
+            }
+        },
+        {
+            title: '盈利点数',
+            dataIndex: 'profit_points',
+            key: 'profit_points',
+            render: (text, record) => {
+                if (text === '-' || text === 0) return <span style={{color: '#ccc'}}>-</span>;
+                const val = parseFloat(text);
+                if (isNaN(val)) return <span style={{color: '#ccc'}}>-</span>;
+
+                // 盈利显示红色，亏损显示绿色
+                const color = val > 0 ? '#ff4d4f' : (val < 0 ? '#52c41a' : '#ccc');
+                // 保留两位小数
+                return <span style={{ color, fontWeight: 'bold' }}>{val.toFixed(2)}</span>;
+            }
         },
         {
             title: '操作',
@@ -313,6 +350,7 @@ const TomorrowStrategy = () => {
                             <Form.Item name="period" label="K线周期">
                                 <Select>
                                     <Option value="daily">日线</Option>
+                                    <Option value="weekly">周线</Option>
                                     <Option value="60">60分钟</Option>
                                     <Option value="30">30分钟</Option>
                                     <Option value="15">15分钟</Option>

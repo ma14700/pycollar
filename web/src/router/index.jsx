@@ -8,6 +8,7 @@ import HistoryPage from '../pages/History';
 import TomorrowStrategyPage from '../pages/TomorrowStrategy';
 import CandleComparePage from '../pages/CandleCompare';
 import RecentNewsPage from '../pages/RecentNews';
+import SymbolScanPage from '../pages/SymbolScan';
 
 const router = createBrowserRouter([
   {
@@ -25,6 +26,10 @@ const router = createBrowserRouter([
       {
         path: 'tomorrow-strategy',
         element: <TomorrowStrategyPage />,
+      },
+      {
+        path: 'symbol-scan',
+        element: <SymbolScanPage />,
       },
       {
         path: 'editor',

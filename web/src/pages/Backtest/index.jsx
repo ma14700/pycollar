@@ -15,19 +15,23 @@ import ChartPanel from '../../components/ChartPanel';
 import { useBacktest } from '../../context/BacktestContext';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
+import { buildBacktestSaveRequests } from '../../utils/backtestSave';
+
+import SingleBacktestResult from './SingleBacktestResult';
+import BatchBacktestResult from './BatchBacktestResult';
 
 const { Option } = Select;
 
 const BacktestPage = () => {
   const { results, setResults, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType } = useBacktest();
   const [loading, setLoading] = useState(false);
-  const [chartType, setChartType] = useState('line');
   const [form] = Form.useForm();
   const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA55BreakoutStrategy');
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   
   // Local cache for lists to avoid repeated API calls if we were to move this to context fully
   // For now, we fetch on mount if symbols is empty or just fetch every time to be safe
@@ -53,9 +57,16 @@ const BacktestPage = () => {
             const marketType = savedFormValues.market_type || 'futures';
             const list = marketType === 'stock' ? sList : fList;
             setSymbols(list || []);
-            form.setFieldsValue({ ...savedFormValues, data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') });
-            if (savedFormValues.symbol) {
-                fetchQuote(savedFormValues.symbol);
+
+            // 确保 symbol 是数组，兼容旧的单选配置
+            const initialValues = { ...savedFormValues, data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') };
+            if (initialValues.symbol && !Array.isArray(initialValues.symbol)) {
+                initialValues.symbol = [initialValues.symbol];
+            }
+
+            form.setFieldsValue(initialValues);
+            if (initialValues.symbol && initialValues.symbol.length > 0) {
+                fetchQuote(initialValues.symbol);
             }
         } else {
             // Initialize with futures
@@ -88,25 +99,27 @@ const BacktestPage = () => {
         defaultSymbol = list.find(s => s.code === 'SH0') || list[0];
       }
       
+      // 默认选中一个，作为数组
       form.setFieldsValue({ 
-        symbol: defaultSymbol.code, 
+        symbol: [defaultSymbol.code],
         contract_multiplier: defaultSymbol.multiplier
       });
       fetchQuote(defaultSymbol.code);
     } else {
-      form.setFieldsValue({ symbol: undefined });
+      form.setFieldsValue({ symbol: [] });
       setQuoteInfo(null);
     }
   };
 
   const fetchQuote = (symbol, overrides = {}) => {
-    if (!symbol) return;
     const requestId = ++quoteRequestId.current;
     setQuoteInfo(null);
+    const targetSymbol = Array.isArray(symbol) ? symbol[0] : symbol;
+    if (!targetSymbol) return;
     const marketType = form.getFieldValue('market_type') || 'futures';
     const dataSource = overrides.data_source || form.getFieldValue('data_source') || 'main';
     const dataProvider = overrides.data_provider || form.getFieldValue('data_provider') || (marketType === 'stock' ? 'akshare' : 'tqsdk');
-    axios.get('http://localhost:8000/api/quote/latest', { params: { symbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
+    axios.get('http://localhost:8000/api/quote/latest', { params: { symbol: targetSymbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
       .then(res => {
         if (requestId === quoteRequestId.current) setQuoteInfo(res.data);
       })
@@ -117,16 +130,48 @@ const BacktestPage = () => {
   };
 
   const onSymbolChange = (value) => {
-    const selected = symbols.find(s => s.code === value);
-    if (selected) {
-      form.setFieldsValue({ contract_multiplier: selected.multiplier });
+    // value 是数组
+    if (Array.isArray(value) && value.length > 0) {
+        // 取最后一个选中的作为参考来设置乘数
+        const lastSelected = value[value.length - 1];
+        const selected = symbols.find(s => s.code === lastSelected);
+        if (selected) {
+            form.setFieldsValue({ contract_multiplier: selected.multiplier });
+        }
+        // 如果只选了一个，获取行情；否则清空行情面板以免混淆
+        if (value.length === 1) {
+            fetchQuote(lastSelected);
+        } else {
+            fetchQuote(null);
+        }
+    } else {
+        fetchQuote(null);
     }
-    fetchQuote(value);
   };
 
   const onFinish = async (values) => {
+    let selectedSymbols = values.symbol;
+    // 类型安全检查：确保是数组
+    if (selectedSymbols && !Array.isArray(selectedSymbols)) {
+        selectedSymbols = [selectedSymbols];
+    }
+
+    if (!selectedSymbols || selectedSymbols.length === 0) {
+        message.error('请至少选择一个品种');
+        return;
+    }
+
     setLoading(true);
-    setResults(null);
+    setResults(null); // Clear previous results
+
+    // 如果是单个品种，保持原有逻辑（但为了统一，可以视为长度为1的批量）
+    // 为了更好的用户体验，如果只选了一个，直接展示结果，不显示折叠面板
+    // 如果选了多个，则使用新逻辑
+
+    const isBatch = selectedSymbols.length > 1;
+    const batchResults = [];
+    let completedCount = 0;
+
     try {
       let params = {};
       const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
@@ -178,10 +223,10 @@ const BacktestPage = () => {
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy') {
+      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
         params = {
             fast_period: 20,
-            slow_period: 55,
+            slow_period: strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
@@ -193,8 +238,8 @@ const BacktestPage = () => {
         };
       } else if (strategyType === 'MA20MA55PartialTakeProfitStrategy') {
         params = {
-            fast_period: 20,
-            slow_period: 55,
+            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
@@ -285,33 +330,95 @@ const BacktestPage = () => {
             fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier
         };
+      } else if (strategyType === 'MA5MA55CrossoverStrategy') {
+        params = {
+            fast_period: values.fast_period ? parseInt(values.fast_period) : 5,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
+            allow_reverse: values.allow_reverse !== undefined ? values.allow_reverse : true,
+            risk_per_trade: riskPerTrade,
+            equity_percent: equityPercent,
+            margin_rate: marginRate,
+            size_mode: values.size_mode || 'fixed',
+            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
+            contract_multiplier: contractMultiplier
+        };
       }
-
-      const payload = {
-        symbol: values.symbol,
-        period: values.period,
-        market_type: values.market_type || 'futures',
-        data_source: values.data_source || 'main',
-        data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
-        strategy_params: params,
-        initial_cash: parseFloat(values.initial_cash || 1000000),
-        auto_optimize: autoOptimize,
-        strategy_name: strategyType
-      };
 
       setCurrentParams(params);
 
-      if (values.date_range && values.date_range.length === 2) {
-        payload.start_date = values.date_range[0].format('YYYY-MM-DD');
-        payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+      // 批量执行逻辑
+      // 为每个品种构建 payload
+      for (const symbolCode of selectedSymbols) {
+          // 获取品种特定的 multiplier
+          const symbolObj = symbols.find(s => s.code === symbolCode);
+          const specificMultiplier = symbolObj ? symbolObj.multiplier : contractMultiplier;
+
+          // 复制并覆盖 multiplier
+          const specificParams = { ...params, contract_multiplier: specificMultiplier };
+
+          const payload = {
+            symbol: symbolCode,
+            period: values.period,
+            market_type: values.market_type || 'futures',
+            data_source: values.data_source || 'main',
+            data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
+            strategy_params: specificParams,
+            initial_cash: parseFloat(values.initial_cash || 1000000),
+            auto_optimize: autoOptimize,
+            strategy_name: strategyType
+          };
+
+          if (values.date_range && values.date_range.length === 2) {
+            payload.start_date = values.date_range[0].format('YYYY-MM-DD');
+            payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+          }
+
+          try {
+              // 串行执行以避免并发问题 (如果后端支持，可以改为 Promise.all)
+              const response = await axios.post('http://localhost:8000/api/backtest', payload);
+              batchResults.push({
+                  symbol: symbolCode,
+                  success: true,
+                  data: { ...response.data, backtest_request: payload }
+              });
+          } catch (err) {
+              console.error(`Backtest failed for ${symbolCode}:`, err);
+              batchResults.push({
+                  symbol: symbolCode,
+                  success: false,
+                  error: err.response?.data?.detail || err.message
+              });
+          }
+
+          completedCount++;
+          // 可以添加 setProgress(completedCount / total)
       }
       
-      const response = await axios.post('http://localhost:8000/api/backtest', payload);
-      setResults(response.data);
-      message.success('回测完成');
+      // 处理结果
+      if (batchResults.length === 1) {
+          if (batchResults[0].success) {
+              setResults(batchResults[0].data);
+              message.success('回测完成');
+          } else {
+              message.error(`回测失败: ${batchResults[0].error}`);
+          }
+      } else {
+          // 多品种结果
+          setResults({
+              isBatch: true,
+              items: batchResults,
+              summary: {
+                  total: batchResults.length,
+                  success: batchResults.filter(r => r.success).length,
+                  failed: batchResults.filter(r => !r.success).length
+              }
+          });
+          message.success(`批量回测完成: 成功 ${batchResults.filter(r => r.success).length}/${batchResults.length}`);
+      }
+
     } catch (error) {
       console.error(error);
-      message.error('回测失败: ' + (error.response?.data?.detail || error.message));
+      message.error('执行出错: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -320,34 +427,21 @@ const BacktestPage = () => {
   const handleSaveBacktest = async () => {
     if (!results) return;
     
-    const safeNum = (val) => {
-        if (val === null || val === undefined || val === '') return null;
-        if (typeof val === 'string' && val.includes('%')) {
-            val = val.replace('%', '');
-        }
-        const num = Number(val);
-        return isNaN(num) ? null : num;
-    };
-
     try {
-      const payload = {
+      const payloads = buildBacktestSaveRequests(results, {
         symbol: form.getFieldValue('symbol'),
         period: form.getFieldValue('period'),
         strategy_name: strategyType,
         strategy_params: currentParams || {},
-        initial_cash: safeNum(results.metrics.initial_cash),
-        final_value: safeNum(results.metrics.final_value),
-        net_profit: safeNum(results.metrics.net_profit),
-        return_rate: safeNum(results.metrics.return_rate),
-        sharpe_ratio: safeNum(results.metrics.sharpe_ratio),
-        max_drawdown: safeNum(results.metrics.max_drawdown),
-        total_trades: safeNum(results.metrics.total_trades),
-        win_rate: safeNum(results.metrics.win_rate),
-        detail_data: results
-      };
-      
-      await axios.post('http://localhost:8000/api/backtest/save', payload);
-      message.success('回测结果已保存');
+      });
+      if (!payloads.length) {
+        message.warning('暂无成功的回测结果可保存');
+        return;
+      }
+      for (const payload of payloads) {
+        await axios.post('http://localhost:8000/api/backtest/save', payload);
+      }
+      message.success(payloads.length > 1 ? `已保存 ${payloads.length} 个品种的回测结果` : '回测结果已保存');
     } catch (error) {
       message.error('保存失败: ' + error.message);
     }
@@ -356,7 +450,7 @@ const BacktestPage = () => {
   return (
     <div style={{ height: '100%', padding: '24px' }}>
         <Row gutter={24} style={{ height: '100%' }}>
-            <Col span={6}>
+            <Col span={isFullScreen ? 0 : 6} style={{ display: isFullScreen ? 'none' : 'block' }}>
             <Card title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
                 <Form form={form} layout="vertical" onFinish={onFinish} 
                     onValuesChange={(changedValues, allValues) => {
@@ -419,11 +513,15 @@ const BacktestPage = () => {
                                     <Select 
                                     onChange={onSymbolChange}
                                     showSearch
-                                    placeholder="选择或搜索品种"
-                                    optionFilterProp="children"
-                                    filterOption={(input, option) =>
-                                        option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
-                                    }
+                                    mode="multiple"
+                                    maxTagCount="responsive"
+                                    placeholder="选择或搜索品种 (支持多选)"
+                                    filterOption={(input, option) => {
+                                        const children = option.children ? option.children.toString().toLowerCase() : '';
+                                        const value = option.value ? option.value.toString().toLowerCase() : '';
+                                        const inputLower = input.toLowerCase();
+                                        return children.includes(inputLower) || value.includes(inputLower);
+                                    }}
                                     >
                                     {symbols.map(s => (
                                         <Option key={s.code} value={s.code}>{s.name}</Option>
@@ -444,7 +542,7 @@ const BacktestPage = () => {
                         setStrategyType(val);
                         setSavedStrategyType(val);
                         // 切换策略时重置默认值
-                        if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy') {
+                        if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
                             let initialValues = {
                                 atr_period: 14,
                                 atr_multiplier: 3.0,
@@ -458,13 +556,20 @@ const BacktestPage = () => {
                                 initialValues.macd_fast = 12;
                                 initialValues.macd_slow = 26;
                                 initialValues.macd_signal = 9;
-                        } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy' || val === 'DualMAFixedTPSLStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy') {
+                        } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy' || val === 'DualMAFixedTPSLStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
                                 initialValues.fast_period = 20;
                                 initialValues.slow_period = 55;
                                 
                                 if (val === 'MA5MA20CrossoverStrategy') {
                                     initialValues.fast_period = 5;
                                     initialValues.slow_period = 20;
+                                } else if (val === 'MA5MA55CrossoverStrategy') {
+                                    initialValues.fast_period = 5;
+                                    initialValues.slow_period = 55;
+                                    initialValues.allow_reverse = true;
+                                } else if (val === 'MA20MA60CrossoverStrategy') {
+                                    initialValues.fast_period = 20;
+                                    initialValues.slow_period = 60;
                                 } else if (val === 'MA20MA55PartialTakeProfitStrategy') {
                                     initialValues.take_profit_points = 50;
                                 } else if (val === 'DualMAFixedTPSLStrategy') {
@@ -526,7 +631,9 @@ const BacktestPage = () => {
                         <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                         <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                         <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                        <Option value="MA20MA60CrossoverStrategy">20/60双均线交叉(多空)</Option>
                         <Option value="MA5MA20CrossoverStrategy">5/20双均线交叉(多空)</Option>
+                        <Option value="MA5MA55CrossoverStrategy">5/55日均线多空交叉</Option>
                         <Option value="MA20MA55RiskRewardStrategy">20/55双均线+盈亏比优化</Option>
                         <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
                         <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
@@ -541,6 +648,7 @@ const BacktestPage = () => {
                 <Form.Item label="回测周期" name="period">
                     <Select>
                     <Option value="daily">日线</Option>
+                    <Option value="weekly">周线</Option>
                     <Option value="60">60分钟</Option>
                     <Option value="30">30分钟</Option>
                     <Option value="15">15分钟</Option>
@@ -552,7 +660,7 @@ const BacktestPage = () => {
                     <DatePicker.RangePicker style={{ width: '100%' }} />
                 </Form.Item>
 
-                {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' ? (
+                {strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -566,6 +674,15 @@ const BacktestPage = () => {
                                 </Form.Item>
                             </Col>
                         </Row>
+                        {strategyType === 'MA5MA55CrossoverStrategy' && (
+                            <Row gutter={16}>
+                                <Col span={12}>
+                                    <Form.Item name="allow_reverse" label="允许反手" valuePropName="checked" tooltip="开启后：金叉平空开多，死叉平多开空；关闭后：仅平仓不反手">
+                                        <Switch />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                        )}
                         {strategyType === 'MA20MA55PartialTakeProfitStrategy' && (
                             <Form.Item name="take_profit_points" label="盈利平半仓点数" tooltip="当浮动盈利达到此点数时，平掉一半仓位">
                                 <Input type="number" />
@@ -740,7 +857,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' ? (
+                {strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                             <Radio.Group>
@@ -847,57 +964,18 @@ const BacktestPage = () => {
             </Card>
             </Col>
             
-            <Col span={18} style={{ height: '100%', overflowY: 'auto' }}>
+            <Col span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
             {results ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <DataSourceInfo info={results.data_info} />
-                {results.optimization_info?.triggered && (
-                    <Alert
-                        message="策略已自动优化"
-                        description={
-                            <div>
-                                <p>{results.optimization_info.message}</p>
-                                <div>
-                                    <Tag color="orange">原始收益: {results.optimization_info.original_return.toFixed(2)}%</Tag>
-                                    <Tag color="green">优化后收益: {results.optimization_info.optimized_return.toFixed(2)}%</Tag>
-                                </div>
-                            </div>
-                        }
-                        type="success"
-                        showIcon
+                results.isBatch ? (
+                    <BatchBacktestResult
+                        results={results}
+                        symbols={symbols}
+                        isFullScreen={isFullScreen}
+                        onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
                     />
-                )}
-                
-                <Card 
-                    title={<span><DashboardOutlined /> 回测概览</span>} 
-                    variant="borderless"
-                    style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
-                >
-                    <MetricsPanel metrics={results.metrics} />
-                </Card>
-                
-                <Card 
-                    title={
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <LineChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-                            {chartType === 'line' ? "账户权益曲线" : 
-                                chartType === 'kline' ? "K线图 & 交易信号" :
-                                "盈亏分布分析"}
-                        </div>
-                    } 
-                    variant="borderless"
-                    style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
-                    extra={
-                        <Radio.Group value={chartType} onChange={e => setChartType(e.target.value)} buttonStyle="solid">
-                            <Radio.Button value="line"><LineChartOutlined /> 趋势图</Radio.Button>
-                            <Radio.Button value="kline"><LineChartOutlined /> K线图</Radio.Button>
-                            <Radio.Button value="pie"><LineChartOutlined /> 盈亏分布</Radio.Button>
-                        </Radio.Group>
-                    }
-                >
-                    <ChartPanel chartType={chartType} results={results} onChartClick={(params) => console.log('Chart clicked:', params)} />
-                </Card>
-                </div>
+                ) : (
+                    <SingleBacktestResult results={results} />
+                )
             ) : (
                 <div style={{ 
                     height: '100%', 

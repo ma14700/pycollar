@@ -114,12 +114,27 @@ def run_worker(request):
     return result
 
 
+def completed_weekly_bars(daily, now=None):
+    weekly = daily.resample("W-FRI").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last",
+        "Volume": "sum", "OpenInterest": "last",
+    }).dropna()
+    now = pd.Timestamp.now(tz="Asia/Shanghai") if now is None else pd.Timestamp(now)
+    if now.tzinfo is not None:
+        now = now.tz_convert("Asia/Shanghai").tz_localize(None)
+    return weekly[weekly.index + pd.Timedelta(hours=15, minutes=15) <= now]
+
+
 def fetch_tq_data(symbol, period="daily", start_date=None, end_date=None, data_source="main"):
-    if period not in PERIODS:
-        raise ValueError("天勤支持日线及 1/5/15/30/60 分钟线")
+    if period not in PERIODS and period != "weekly":
+        raise ValueError("天勤支持周线、日线及 1/5/15/30/60 分钟线")
     resolved = tq_symbol(symbol, data_source)
-    result = run_worker({"action": "bars", "symbol": resolved, "period": period})
-    df = normalize_serial(result["bars"], period)
+    source_period = "daily" if period == "weekly" else period
+    result = run_worker({"action": "bars", "symbol": resolved, "period": source_period})
+    df = normalize_serial(result["bars"], source_period)
+    if period == "weekly":
+        # Aggregate before date filtering so a midweek start cannot truncate OHLC.
+        df = completed_weekly_bars(df)
     if df.empty:
         raise ValueError("天勤未返回有效的已完成 K 线")
     available_start, available_end = df.index.min(), df.index.max()
@@ -135,7 +150,8 @@ def fetch_tq_data(symbol, period="daily", start_date=None, end_date=None, data_s
         "period": period, "timezone": "Asia/Shanghai", "bars": len(df),
         "start": str(df.index.min()), "end": str(df.index.max()),
         "available_start": str(available_start), "available_end": str(available_end),
-        "note": "近期滚动窗口，最多 10000 根；仅使用已完成 K 线，日期筛选按北京时间。",
+        "note": ("周线由最多 10000 根天勤日线按周五合成，排除未结束的交易周。"
+                 if period == "weekly" else "近期滚动窗口，最多 10000 根；仅使用已完成 K 线，日期筛选按北京时间。"),
     }
     return df
 

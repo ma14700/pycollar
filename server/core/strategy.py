@@ -10,6 +10,7 @@ class BaseStrategy(bt.Strategy):
         ('print_log', True),
         ('start_date', None),
         ('end_date', None), # 新增结束日期参数
+        ('disable_auto_close', False), # 是否禁用自动平仓
         ('contract_multiplier', 1),
         ('atr_period', 14),
         ('atr_multiplier', 2.0),
@@ -102,15 +103,22 @@ class BaseStrategy(bt.Strategy):
                  is_near_end = True
 
         if is_near_end:
-            if self.position:
-                self.log('数据结束检查: 平掉所有持仓 (市价单)')
-                # 使用 Market 单在下一根(即最后一根)K线开盘时立即成交，确保平仓成功
-                self.close(exectype=bt.Order.Market) 
-            return False # 停止当前K线的其他信号处理
+            # 如果未禁用自动平仓，则执行平仓逻辑
+            if not self.params.disable_auto_close:
+                if self.position:
+                    self.log('数据结束检查: 平掉所有持仓 (市价单)')
+                    # 使用 Market 单在下一根(即最后一根)K线开盘时立即成交，确保平仓成功
+                    self.close(exectype=bt.Order.Market)
+
+            # 无论是否平仓，如果接近结束，都停止处理新信号，除非禁用了自动平仓(意味着我们希望在扫描模式下看到最新的信号)
+            # 对于扫描模式，我们希望看到最新K线的信号，所以如果禁用了自动平仓，就不应该返回 False
+            if not self.params.disable_auto_close:
+                return False # 停止当前K线的其他信号处理
             
         # 最后一根K线直接跳过，防止产生新信号
         if self.datas[0].buflen() > 0 and len(self.datas[0]) >= self.datas[0].buflen():
-            return False
+            if not self.params.disable_auto_close:
+                return False
 
         return True
 
@@ -123,9 +131,10 @@ class DKX(bt.Indicator):
     DKX = (20*MID + 19*REF(MID,1) + ... + 1*REF(MID,19)) / 210
     MADKX = MA(DKX, 10)
     
-    注：上述公式等价于 SMMA (Smoothed Moving Average)
-    DKX = SMMA(MID, period)
-    MADKX = SMMA(DKX, ma_period)
+    修正：
+    原代码错误地使用了 SMMA (平滑移动平均)。
+    标准 DKX 实际上是 WMA (线性加权移动平均)，权重为 20, 19...1。
+    MADKX 通常为 SMA (简单移动平均)。
     """
     lines = ('dkx', 'madkx',)
     params = (('period', 20), ('ma_period', 10),)
@@ -134,11 +143,11 @@ class DKX(bt.Indicator):
         # 计算 MID
         mid = (3 * self.data.close + self.data.low + self.data.open + self.data.high) / 6.0
         
-        # 使用 Backtrader 的 SMMA (如果公式匹配)
-        # 引擎中的公式: new = (val + (n-1)*old) / n
-        # 这正是 Wilder's Smoothing (SMMA)
-        self.l.dkx = bt.ind.SMMA(mid, period=self.params.period)
-        self.l.madkx = bt.ind.SMMA(self.l.dkx, period=self.params.ma_period)
+        # DKX: 使用加权移动平均 (WMA)
+        self.l.dkx = bt.ind.WeightedMovingAverage(mid, period=self.params.period)
+
+        # MADKX: 使用简单移动平均 (SMA)
+        self.l.madkx = bt.ind.SMA(self.l.dkx, period=self.params.ma_period)
 
 # --- 具体策略类 ---
 
@@ -647,7 +656,7 @@ class MA55TouchExitStrategy(BaseStrategy):
 
 class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     """
-    20/55 双均线 + 盈利平半仓
+    20/55 双均线 + 盈利平半仓 (使用 Limit 单)
     """
     params = (
         ('take_profit_points', 50.0),
@@ -655,31 +664,57 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     
     def __init__(self):
         super().__init__()
-        self.tp_executed = False
-        self.entry_price = 0.0
+        self.tp_order = None
 
     def notify_order(self, order):
-        BaseStrategy.notify_order(self, order)
+
+        # 检查止盈单状态
+        if self.tp_order and order.ref == self.tp_order.ref:
+            if order.status == order.Completed:
+                self.log(f'Partial TP Completed: Price {order.executed.price:.2f}, Size {order.executed.size}')
+                self.tp_order = None
+            elif order.status in [order.Canceled, order.Rejected, order.Margin]:
+                self.tp_order = None
+
+        # 检查主订单成交，挂止盈单
         if order.status == order.Completed:
-            if abs(self.position.size) >= self.params.fixed_size:
-                self.tp_executed = False
-                self.entry_price = order.executed.price
+            # 如果没有 TP 单，且持仓不为0
+            if not self.tp_order and self.position.size != 0:
+                self.place_partial_tp()
+    def place_partial_tp(self):
+        # 计算目标价格 (基于持仓均价)
+        avg_price = self.position.price
+
+        # 计算平仓数量 (半仓)
+        size = abs(self.position.size) / 2.0
+
+        # 避免手数太小 (可选: 如果小于 0.01 则不操作? 但为了通用性先保留)
+        if size == 0: return
+
+        target_price = 0
+        if self.position.size > 0:
+            target_price = avg_price + self.params.take_profit_points
+            self.tp_order = self.sell(size=size, price=target_price, exectype=bt.Order.Limit)
+        else:
+            target_price = avg_price - self.params.take_profit_points
+            self.tp_order = self.buy(size=size, price=target_price, exectype=bt.Order.Limit)
+
+        self.log(f'Placed Partial TP Limit Order: Price {target_price:.2f}, Size {size}')
 
     def next(self):
-        super().next()
+        # 如果有交叉信号，先取消现有的 TP 单，因为可能要反手
+        if self.crossover > 0 or self.crossover < 0:
+            if self.tp_order:
+                self.cancel(self.tp_order)
+                self.tp_order = None
         
-        # 如果是最后两根K线（已在pre_next处理平仓或跳过），则停止后续逻辑
-        if len(self.datas[0]) >= self.datas[0].buflen() - 1:
-            return
+        super().next()
 
-        if self.position.size != 0 and not self.tp_executed:
-            profit = 0
-            if self.position.size > 0:
-                profit = self.data.close[0] - self.entry_price
-            else:
-                profit = self.entry_price - self.data.close[0]
-            
-            if profit >= self.params.take_profit_points:
-                self.log(f'Partial TP: {profit:.2f}')
-                self.close(size=self.position.size / 2)
-                self.tp_executed = True
+# --- 动态导入新策略 ---
+# 为了保持 engine.py 的零侵入性，我们在 strategy 模块末尾导入新策略
+# 这样 getattr(strategy, 'MA5MA55CrossoverStrategy') 就能找到它
+try:
+    from .ma5_55_cross import MA5MA55CrossoverStrategy
+    from .ma20_60_cross import MA20MA60CrossoverStrategy
+except ImportError:
+    pass

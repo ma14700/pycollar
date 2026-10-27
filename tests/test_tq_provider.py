@@ -24,6 +24,28 @@ def bars(times, prices=None):
 
 
 class TqProviderTests(unittest.TestCase):
+    def test_weekly_aggregates_full_ohlcv_and_excludes_unfinished_week(self):
+        daily = tq.normalize_serial(bars(pd.bdate_range('2025-01-06', '2025-01-15').astype(str),
+                                        list(range(100, 108))), 'daily', now='2025-01-15 16:00')
+        weekly = tq.completed_weekly_bars(daily, now='2025-01-15 16:00')
+        self.assertEqual(list(weekly.index), [pd.Timestamp('2025-01-10')])
+        self.assertEqual(list(weekly.iloc[0]), [100, 106, 98, 104, 500, 200])
+
+    def test_weekly_completion_uses_beijing_friday_close(self):
+        daily = tq.normalize_serial(bars(['2025-01-06', '2025-01-10']), 'daily', now='2025-01-11')
+        self.assertTrue(tq.completed_weekly_bars(daily, now='2025-01-10T07:14:00Z').empty)
+        self.assertEqual(len(tq.completed_weekly_bars(daily, now='2025-01-10T07:15:00Z')), 1)
+
+    def test_weekly_uses_tq_daily_and_filters_after_aggregation(self):
+        raw = bars(pd.bdate_range('2025-01-06', '2025-01-17').astype(str), list(range(100, 110)))
+        with patch.object(tq, 'run_worker', return_value={'bars': raw}) as worker:
+            weekly = tq.fetch_tq_data('RB0', 'weekly', '2025-01-08', '2025-01-15')
+        self.assertEqual(worker.call_args.args[0]['period'], 'daily')
+        self.assertEqual(len(weekly), 1)
+        self.assertEqual(weekly.iloc[0].Open, 100)
+        self.assertEqual(weekly.attrs['data_info']['provider'], 'tqsdk')
+        self.assertEqual(weekly.attrs['data_info']['period'], 'weekly')
+
     def test_symbol_mapping(self):
         for symbol, kind, expected in [
             ('RB0', 'main', 'KQ.m@SHFE.rb'), ('SH0', 'main', 'KQ.m@CZCE.SH'),
