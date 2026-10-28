@@ -19,6 +19,7 @@ STRATEGIES = [
     'MA20MA55RiskRewardStrategy', 'StockMA20MA55LongOnlyStrategy',
     'MA20MA55PartialTakeProfitStrategy', 'DualMAFixedTPSLStrategy', 'DKXStrategy',
     'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy', 'TrendFollowingStrategy',
+    'MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy',
 ]
 
 
@@ -148,6 +149,26 @@ class TomorrowStrategyTests(unittest.TestCase):
         with patch.object(engine, 'fetch_data', return_value=frame.iloc[10:]), contextlib.redirect_stdout(io.StringIO()):
             result = engine.BacktestEngine().analyze_detail(**original['analysis_request'])
         self.assertIn('重新分析', result['error'])
+
+    def test_snapshot_preserves_independent_execution_delays(self):
+        frame = price_frame()
+        original = self.detail(frame, params={'entry_delay_bars': 3, 'exit_delay_bars': 4})
+        request = original['analysis_request']
+        self.assertEqual(request['strategy_params']['entry_delay_bars'], 3)
+        self.assertEqual(request['strategy_params']['exit_delay_bars'], 4)
+        with patch.object(engine, 'fetch_data', return_value=frame), contextlib.redirect_stdout(io.StringIO()):
+            replayed = engine.BacktestEngine().analyze_detail(**request)
+        self.assertEqual(original['trades'], replayed['trades'])
+        self.assertEqual(original['position_state'], replayed['position_state'])
+
+    def test_strategy_callbacks_do_not_duplicate_dashboard_execution_logs(self):
+        detail = self.detail(price_frame(), 'DualMAFixedTPSLStrategy',
+                             {'fast_period': 3, 'slow_period': 9, 'fixed_size': 4,
+                              'sl_value': 2, 'tp_value': 3})
+        executions = [line for line in detail['logs'] if any(
+            marker in line for marker in ('交易执行', '买入成交', '卖出成交'))]
+        self.assertEqual(len(executions), len(detail['trades']))
+        self.assertGreater(detail['metrics']['total_trades'], 0)
 
     def test_partial_take_profit_does_not_reset_holding_duration(self):
         prices = [100] * 25 + [110] * 8 + [90] * 12 + list(range(110, 150))

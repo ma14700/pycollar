@@ -24,6 +24,17 @@ test('old results compute 144 only when a full window is available', () => {
     assert.equal(series[0].connectNulls, false);
 });
 
+test('20/144 entry strategy retains its distinct 55 exit line with one reference 144', () => {
+    const series = buildMovingAverageSeries({ ma: {
+        strategy_fast: [101], strategy_fast_label: 'MA20',
+        strategy_slow: [90], strategy_slow_label: 'MA144',
+        strategy_exit: [99], strategy_exit_label: 'MA55',
+        ma55: [98], ma144: [90],
+    } });
+    assert.deepEqual(series.map(line => line.name), ['MA20', 'MA55', 'MA144']);
+    assert.deepEqual(series.find(line => line.name === 'MA55').data, [99]);
+});
+
 test('invalid closes leave gaps instead of treating them as zero', () => {
     const values = Array.from({ length: 144 }, () => [100, 100, 99, 101]);
     values[70][1] = null;

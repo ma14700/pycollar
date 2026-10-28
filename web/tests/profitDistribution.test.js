@@ -14,6 +14,12 @@ test('supports all winning or all losing trades', () => {
     assert.deepEqual(values({ won_trades: 0, lost_trades: 5 }), [0, 5]);
 });
 
+test('flat closed trades are a separate sector, including all flat outcomes', () => {
+    assert.deepEqual(values({ won_trades: 2, lost_trades: 1, flat_trades: 3 }), [2, 1, 3]);
+    assert.deepEqual(values({ won_trades: 0, lost_trades: 0, flat_trades: 2 }), [0, 0, 2]);
+    assert.match(getProfitDistributionOption({ won_trades: 0, lost_trades: 0, flat_trades: 2 }).series[0].data[2].name, /持平/);
+});
+
 test('legacy percentage is on a 0 to 100 scale', () => {
     assert.deepEqual(values({ total_trades: 19, win_rate: 36.84 }), [36.84, 63.16]);
     assert.deepEqual(values({ total_trades: 5, win_rate: 0 }), [0, 100]);

@@ -47,7 +47,7 @@ class BaseStrategy(bt.Strategy):
             self.bar_executed = len(self)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log('订单已取消/保证金不足/被拒绝')
+            self.log('回测结束：待执行信号未成交' if order.info.get('end_of_backtest') else '订单已取消/保证金不足/被拒绝')
 
         self.order = None
 
@@ -105,10 +105,17 @@ class BaseStrategy(bt.Strategy):
         if is_near_end:
             # 如果未禁用自动平仓，则执行平仓逻辑
             if not self.params.disable_auto_close:
+                # Do not let a delayed signal open a new position on the last bar.
+                for pending in list(self.broker.get_orders_open()):
+                    if pending.owner is self and pending.info.get('execution_delay_bars', 1) > 1:
+                        pending.addinfo(end_of_backtest=True)
+                        self.cancel(pending)
+                        if self.order is not None and self.order.ref == pending.ref:
+                            self.order = None
                 if self.position:
                     self.log('数据结束检查: 平掉所有持仓 (市价单)')
                     # 使用 Market 单在下一根(即最后一根)K线开盘时立即成交，确保平仓成功
-                    self.close(exectype=bt.Order.Market)
+                    self.close(exectype=bt.Order.Market, force_execution=True)
 
             # 无论是否平仓，如果接近结束，都停止处理新信号，除非禁用了自动平仓(意味着我们希望在扫描模式下看到最新的信号)
             # 对于扫描模式，我们希望看到最新K线的信号，所以如果禁用了自动平仓，就不应该返回 False
@@ -280,6 +287,76 @@ class StockMA20MA55LongOnlyStrategy(BaseStrategy):
             if self.position.size > 0:
                 self.log('平仓信号 (死叉)')
                 self.order = self.close()
+
+class MA20MA144LongOnlyStrategy(BaseStrategy):
+    """MA20/144 金叉开多，MA20/55 死叉离场，等待新的入场金叉。"""
+    params = (
+        ('fast_period', 20),
+        ('slow_period', 144),
+        ('exit_period', 55),
+    )
+
+    @classmethod
+    def required_bars(cls, params):
+        return max(int(params.get(key, getattr(cls.params, key)))
+                   for key in ('fast_period', 'slow_period', 'exit_period')) + 1
+
+    def __init__(self):
+        super().__init__()
+        self.ma_fast = bt.ind.SMA(self.data.close, period=self.p.fast_period)
+        self.ma_entry = bt.ind.SMA(self.data.close, period=self.p.slow_period)
+        self.ma_exit = bt.ind.SMA(self.data.close, period=self.p.exit_period)
+        self.entry_cross = bt.ind.CrossOver(self.ma_fast, self.ma_entry)
+        self.exit_cross = bt.ind.CrossOver(self.ma_fast, self.ma_exit)
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.position.size > 0:
+            if self.exit_cross < 0:
+                self.log(f'平多信号: MA{self.p.fast_period} 下穿 MA{self.p.exit_period}，等待下一次入场金叉')
+                self.order = self.close()
+        elif self.position.size == 0 and self.entry_cross > 0:
+            self.log(f'开多信号: MA{self.p.fast_period} 上穿 MA{self.p.slow_period}')
+            self.order = self.buy(size=self.p.fixed_size)
+
+
+class MA20MA144ShortOnlyStrategy(MA20MA144LongOnlyStrategy):
+    """MA20/144 死叉开空，MA20/55 金叉离场，等待新的入场死叉。"""
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.position.size < 0:
+            if self.exit_cross > 0:
+                self.log(f'平空信号: MA{self.p.fast_period} 上穿 MA{self.p.exit_period}，等待下一次入场死叉')
+                self.order = self.close()
+        elif self.position.size == 0 and self.entry_cross < 0:
+            self.log(f'开空信号: MA{self.p.fast_period} 下穿 MA{self.p.slow_period}')
+            self.order = self.sell(size=self.p.fixed_size)
+
+
+class MA20MA144LongShortStrategy(MA20MA144LongOnlyStrategy):
+    """空仓按 MA20/144 交叉开多或开空，持仓按 MA20/55 反向交叉离场。"""
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.position.size > 0:
+            if self.exit_cross < 0:
+                self.log(f'平多信号: MA{self.p.fast_period} 下穿 MA{self.p.exit_period}，等待新的入场交叉')
+                self.order = self.close()
+        elif self.position.size < 0:
+            if self.exit_cross > 0:
+                self.log(f'平空信号: MA{self.p.fast_period} 上穿 MA{self.p.exit_period}，等待新的入场交叉')
+                self.order = self.close()
+        elif self.entry_cross > 0:
+            self.log(f'开多信号: MA{self.p.fast_period} 上穿 MA{self.p.slow_period}')
+            self.order = self.buy(size=self.p.fixed_size)
+        elif self.entry_cross < 0:
+            self.log(f'开空信号: MA{self.p.fast_period} 下穿 MA{self.p.slow_period}')
+            self.order = self.sell(size=self.p.fixed_size)
+
 
 class DualMAFixedTPSLStrategy(BaseStrategy):
     """

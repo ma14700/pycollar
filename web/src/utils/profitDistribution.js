@@ -8,10 +8,11 @@ export const getProfitDistributionOption = (metrics = {}) => {
     const stats = metrics || {};
     const won = nonNegativeNumber(stats.won_trades);
     const lost = nonNegativeNumber(stats.lost_trades);
+    const flat = nonNegativeNumber(stats.flat_trades) ?? 0;
     const total = nonNegativeNumber(stats.total_trades);
     const rate = nonNegativeNumber(stats.win_rate);
     const hasCounts = won !== null && lost !== null;
-    const hasTrades = hasCounts ? won + lost > 0 : total > 0 && rate !== null;
+    const hasTrades = hasCounts ? won + lost + flat > 0 : total > 0 && rate !== null;
 
     if (!hasTrades) {
         return {
@@ -30,7 +31,7 @@ export const getProfitDistributionOption = (metrics = {}) => {
 
     return {
         title: { text: '盈亏分布', left: 'center' },
-        legend: { bottom: 16, data: ['盈利交易', '亏损交易'] },
+        legend: { bottom: 16, data: ['盈利交易', '亏损交易', ...(hasCounts && flat > 0 ? ['持平交易'] : [])] },
         tooltip: {
             trigger: 'item',
             formatter: hasCounts ? '{b}：{c} 笔（{d}%）' : '{b}：{d}%',
@@ -44,6 +45,7 @@ export const getProfitDistributionOption = (metrics = {}) => {
             data: [
                 { value: win, name: '盈利交易', itemStyle: { color: '#cf1322' } },
                 { value: loss, name: '亏损交易', itemStyle: { color: '#3f8600' } },
+                ...(hasCounts && flat > 0 ? [{ value: flat, name: '持平交易', itemStyle: { color: '#94a3b8' } }] : []),
             ],
         }],
     };
