@@ -1,67 +1,6 @@
 import { symbolMap, futuresMap } from '../constants';
 
-export const parseLogItem = (log, index) => {
-    const logStr = String(log || '');
-    const firstComma = logStr.indexOf(',');
-    const date = firstComma !== -1 ? logStr.substring(0, firstComma).trim() : '';
-    const content = firstComma !== -1 ? logStr.substring(firstComma + 1).trim() : logStr;
-    
-    let type = 'info';
-    if (content.includes('买入') || content.includes('开多') || content.includes('做多')) type = 'buy';
-    else if (content.includes('卖出') || content.includes('开空') || content.includes('做空')) type = 'sell';
-    else if (content.includes('平仓') || content.includes('平多') || content.includes('平空')) type = 'profit'; // Use 'profit' color for closing
-    else if (content.includes('策略启动') || content.includes('回测结束')) type = 'system';
-    else if (content.includes('金叉') || content.includes('死叉')) type = 'signal';
-
-    // Extract structured data from standardized log format
-    // Format: 交易执行: 【{action}】 价格: {price}, 数量: {size}, 费用: {comm}, 当前持仓: {pos}, 持仓成本: {cost}, 方向: {dir}, 期间最大回撤: {mdd}, 净利润: {pnl}
-    
-    let action = '';
-    const actionMatch = content.match(/【(.*?)】/);
-    if (actionMatch) action = actionMatch[1];
-    
-    const extractNum = (key) => {
-        const regex = new RegExp(`${key}:\\s*([-\\d.]+)`);
-        const match = content.match(regex);
-        return match ? parseFloat(match[1]) : null;
-    };
-    
-    const price = extractNum('价格');
-    const size = extractNum('数量');
-    const comm = extractNum('费用');
-    const pos = extractNum('当前持仓');
-    const cost = extractNum('持仓成本');
-    const mdd = extractNum('期间最大回撤');
-    const pnl = extractNum('净利润');
-    const pct = extractNum('收益率'); // Extract percentage
-    
-    let dir = '';
-    const dirMatch = content.match(/方向:\s*([^,]+)/); // 方向 usually followed by comma or end
-    if (dirMatch) {
-        // Handle cases where "方向" is the last item or followed by MDD/PnL
-        // The regex `[^,]+` matches until comma. If "方向: 做多 期间最大回撤...", we need to stop before next keyword
-        // Actually my backend uses ", " separator.
-        dir = dirMatch[1].trim();
-        // Clean up if it grabbed too much (e.g. if next field didn't have comma before it, though my backend puts commas)
-    }
-
-    return { 
-        key: index, 
-        date, 
-        content, 
-        type, 
-        action, 
-        price, 
-        size, 
-        comm, 
-        pos, 
-        cost, 
-        dir, 
-        mdd, 
-        pnl,
-        pct
-    };
-};
+export { parseLogItem } from './logParser.js';
 
 export function calculateMA(dayCount, data) {
   if (!Array.isArray(data)) return [];

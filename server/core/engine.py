@@ -5,6 +5,9 @@ import datetime
 import importlib
 from .data_loader import fetch_data
 from . import strategy
+from .execution_delay import SignalDelayBroker, execution_delay_params
+from .accounting import (configure_accounting, closed_trade_stats, equity_statistics,
+                         AccountEquity, COMMISSION_RATE, METRICS_VERSION)
 
 class StrategyData(bt.feeds.PandasData):
     lines = ('ma_fast', 'ma_slow',)
@@ -31,6 +34,13 @@ class BacktestEngine:
 
     def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare'):
         strategy_params = strategy_params.copy()
+        try:
+            initial_cash = float(initial_cash)
+            if not np.isfinite(initial_cash) or initial_cash <= 0:
+                raise ValueError('初始资金必须为大于 0 的有限数字')
+            delay_params = execution_delay_params(strategy_params)
+        except (ValueError, TypeError) as error:
+            return {"error": str(error)}
         print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
         importlib.reload(strategy)
@@ -67,9 +77,6 @@ class BacktestEngine:
                 self.accum_profit_per_hand = 0.0 # 累计每手净利润
                 self.accum_profit_pct = 0.0 # 累计每手盈利百分比
                 
-                # 辅助记录最大最小PNL
-                self.max_trade_pnl = -float('inf')
-                self.min_trade_pnl = float('inf')
 
             def pre_next(self):
                 # 覆盖 BaseStrategy.pre_next 以防止回测结束时强制平仓
@@ -114,11 +121,9 @@ class BacktestEngine:
                 self.max_pos_size = 0.0
                 self.accum_profit_per_hand = 0.0
                 self.accum_profit_pct = 0.0
-                self.sum_entry_price = 0.0
-                self.closed_trade_count = 0
+                self.closed_trade_stats = []
+                self.total_commission = 0.0
                 
-                self.max_trade_pnl = -float('inf')
-                self.min_trade_pnl = float('inf')
                 
                 # 设置执行起始窗口 (以便过滤预热期事件)
                 try:
@@ -132,75 +137,24 @@ class BacktestEngine:
 
             def notify_trade(self, trade):
                 if trade.isclosed:
-                    # 计算点数
-                    multiplier = getattr(self.p, 'contract_multiplier', 1)
-                    # margin_rate = getattr(self.p, 'margin_rate', 0.1) # Unused
-                    
-                    size = abs(trade.size)
-                    if size == 0:
-                        # Try to recover size from history
-                        if hasattr(trade, 'history') and len(trade.history) > 0:
-                            max_size = 0
-                            curr_size = 0
-                            for ev in trade.history:
-                                # trade.history contains TradeHistory objects (dict-like)
-                                # Structure: {'status': {...}, 'event': {'size': ..., ...}}
-                                if 'event' in ev and 'size' in ev['event']:
-                                    ev_size = ev['event']['size']
-                                    curr_size += ev_size
-                                    if abs(curr_size) > max_size:
-                                        max_size = abs(curr_size)
-                            size = max_size
-                        
-                        # Fallback to fixed_size if history recovery failed
-                        if size == 0:
-                            size_mode = getattr(self.params, 'size_mode', 'fixed')
-                            if size_mode == 'fixed' or not size_mode:
-                                size = int(getattr(self.params, 'fixed_size', 1))
-                    
-                    pnl = trade.pnlcomm
+                    stats = closed_trade_stats(trade, getattr(self.p, 'contract_multiplier', 1))
+                    self.closed_trade_stats.append(stats)
+                    self.accum_profit_per_hand += stats['net_per_hand']
+                    self.accum_profit_pct += stats['return_pct'] / 100
+                    self.max_profit_points = max(self.max_profit_points, stats['net_points'])
+                    self.max_loss_points = min(self.max_loss_points, stats['net_points'])
 
-                    if size > 0 and multiplier > 0:
-                        points = pnl / (size * multiplier)
-                        
-                        # 累计每手净利润
-                        self.accum_profit_per_hand += pnl / size
-                        
-                        # 累计盈利百分比 (基于开仓价)
-                        # 用户定义逻辑：(总每手净利润 / 平均开仓价格)
-                        # 这里只更新 sum_entry_price，最终百分比在 stop() 或 run() 结束时计算
-                        # 但为了实时更新 metrics，我们在这里计算当前状态
-                        if trade.price > 0:
-                            self.sum_entry_price += trade.price
-                            self.closed_trade_count += 1
-                            
-                            # Calculate Aggregate Percentage
-                            avg_entry_price = self.sum_entry_price / self.closed_trade_count
-                            if avg_entry_price > 0:
-                                self.accum_profit_pct = (self.accum_profit_per_hand / avg_entry_price)
-                        
-                        # 记录最大盈利交易的点数
-                        if pnl > self.max_trade_pnl:
-                            self.max_trade_pnl = pnl
-                            self.max_profit_points = points
-                        
-                        # 记录最亏交易的点数
-                        if pnl < self.min_trade_pnl:
-                            self.min_trade_pnl = pnl
-                            self.max_loss_points = points
-                
                 super().notify_trade(trade)
 
             def next(self):
                 # 记录最大资金使用率
-                # 由于 broker.setcommission 设置了 margin=0，getcash() 不会扣除保证金
-                # 因此需要手动计算理论保证金占用
+                # Futures reserve collateral at the average entry price; stocks
+                # use full market value. This is sampled at bar close only.
                 val = self.broker.getvalue()
                 if val > 0:
-                    margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                    margin_rate = getattr(self.p, 'margin_rate', 0.1) if market_type == 'futures' else 1.0
                     multiplier = getattr(self.p, 'contract_multiplier', 1)
-                    # 使用收盘价估算市值
-                    price = self.datas[0].close[0]
+                    price = self.position.price if market_type == 'futures' else self.datas[0].close[0]
                     size = abs(self.position.size)
                     
                     margin_used = size * price * multiplier * margin_rate
@@ -352,11 +306,14 @@ class BacktestEngine:
                         final_mdd_price = None
                         
                     self.trades_history.append({
+                        "signal_date": order.info.get('signal_time'),
+                        "execution_delay_bars": order.info.get('execution_delay_bars', 1),
                         "date": dt,
                         "type": "buy" if order.isbuy() else "sell",
                         "action": action_type,
                         "price": float(price),
                         "size": float(size),
+                        "commission": float(order.executed.comm),
                         "position": float(current_pos),  # 添加当前持仓量
                         "mdd_price": final_mdd_price, # 当前持仓期间的最大回撤价格
                         "mdd_date": self.current_mdd_date if final_mdd_price is not None else None,    # 最大回撤发生的日期
@@ -369,48 +326,17 @@ class BacktestEngine:
                     final_entry_price_val = final_entry_price if final_entry_price is not None else 0.0
                     mdd_str = f", 期间最大回撤: {final_mdd_price:.2f}" if final_mdd_price is not None else ""
                     
-                    # PnL (Net Profit with commission)
-                    # pnl is gross, comm is commission. Only show for closing trades (pnl != 0)
-                    raw_pnl = order.executed.pnl
-                    pnl_val = raw_pnl - order.executed.comm
-                    pnl_str = ""
-                    if raw_pnl != 0:
-                        pnl_str = f", 净利润: {pnl_val:.2f}"
-                        # Calculate Profit Percentage
-                        # User Logic: (NetProfitPerHand / EntryPrice)
-                        try:
-                            exec_size = abs(order.executed.size)
-                            multiplier = getattr(self.p, 'contract_multiplier', 1)
-                            
-                            # 1. Infer Entry Price using Gross PnL (raw_pnl)
-                            # Long (Sell to Close): Entry = Exit - (GrossPnL / (Size * Mult))
-                            # Short (Buy to Close): Entry = Exit + (GrossPnL / (Size * Mult))
-                            
-                            profit_per_hand_gross = raw_pnl / exec_size
-                            price_diff = profit_per_hand_gross / multiplier
-                            
-                            implied_entry = 0.0
-                            if order.executed.size < 0: # Sell to Close (Long)
-                                implied_entry = order.executed.price - price_diff
-                            else: # Buy to Close (Short)
-                                implied_entry = order.executed.price + price_diff
-                                
-                            if implied_entry > 0:
-                                # 2. Calculate Pct using Net PnL (pnl_val)
-                                profit_per_hand_net = pnl_val / exec_size
-                                pct = (profit_per_hand_net / implied_entry)
-                                pnl_str += f", 收益率: {pct*100:.2f}%"
-
-                                # Accumulate
-                                self.accum_profit_per_hand += profit_per_hand_net
-                                self.accum_profit_pct += pct
-                        except Exception:
-                            pass
+                    # A closing order alone excludes entry commissions and can
+                    # contain an opening leg on reversal. Settle net PnL once,
+                    # in notify_trade, rather than estimating/accumulating twice.
+                    self.total_commission += float(comm)
 
                     log_msg = (f"交易执行: 【{action_type}】 "
                                f"价格: {price:.2f}, 数量: {float(size)}, 费用: {comm:.2f}, "
                                f"当前持仓: {float(current_pos)}, 持仓成本: {final_entry_price_val:.2f}, "
-                               f"方向: {holding_direction}{mdd_str}{pnl_str}")
+                               f"方向: {holding_direction}{mdd_str}")
+                    if order.info.get('execution_delay_bars', 1) > 1:
+                        log_msg += f", 信号时间: {order.info.get('signal_time')}, 执行 K 线: 信号后第 {order.info.get('execution_delay_bars')} 根开盘"
                     self.log(log_msg)
                     
                     if order.isbuy():
@@ -434,11 +360,16 @@ class BacktestEngine:
                     # 如果是单纯开仓 (0 -> size)，mdd 为 None，这是合理的，因为刚开仓还没有"过程"。
                 
                 elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-                    self.log('订单已取消/保证金不足/被拒绝')
+                    self.log('回测结束：待执行信号未成交' if order.info.get('end_of_backtest') else '订单已取消/保证金不足/被拒绝')
 
                 self.order = None
 
         cerebro = bt.Cerebro()
+        cerebro.setbroker(SignalDelayBroker(**delay_params))
+        try:
+            configure_accounting(cerebro.broker, strategy_params, market_type)
+        except (ValueError, TypeError) as error:
+            return {"error": str(error)}
         
         # 检查是否开启“开仓最优模式” (Optimal Entry)
         # 如果开启，启用 cheat_on_open 以便能在当前 K 线上以 Limit 价格成交
@@ -497,6 +428,12 @@ class BacktestEngine:
             
         if df_raw is None or df_raw.empty:
             return {"error": "未找到该品种的数据，请检查代码或日期范围"}
+
+        history_requirement = getattr(StrategyClass, 'required_bars', None)
+        if callable(history_requirement):
+            required_bars = history_requirement(strategy_params)
+            if len(df_raw) < required_bars:
+                return {"error": f"该策略至少需要 {required_bars} 根已完成 K 线用于均线与交叉确认，当前仅有 {len(df_raw)} 根，请扩大数据范围或更换周期"}
             
         # 转换 timeframe
         if period == 'weekly':
@@ -541,9 +478,9 @@ class BacktestEngine:
         cerebro.adddata(data)
         
         # 2. 添加策略
-        # 确保 contract_multiplier 是 int
+        # Retain the same multiplier used by broker accounting and statistics.
         if 'contract_multiplier' in strategy_params:
-            strategy_params['contract_multiplier'] = int(strategy_params['contract_multiplier'])
+            strategy_params['contract_multiplier'] = float(strategy_params['contract_multiplier'])
             
         # 过滤掉不属于策略的参数
         filtered_params = self._filter_params(StrategyClass, strategy_params)
@@ -560,21 +497,8 @@ class BacktestEngine:
         # 3. 资金设置
         cerebro.broker.setcash(initial_cash)
         
-        # 手续费设置 (根据品种可以做个简单映射，这里暂时通用)
-        # 假设是期货，按手收费或按比例
-        # 为了演示，设置一个通用费率
-        # 将 margin 设置为 0，禁用 Broker 端的保证金检查，完全由策略端的仓位管理控制风险
-        cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=strategy_params.get('contract_multiplier', 1))
-        
         # 4. 添加分析器
-        cerebro.addanalyzer(
-            bt.analyzers.TimeReturn,
-            _name='timereturn',
-            timeframe=timeframe,
-            compression=compression
-        )
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days, compression=1, riskfreerate=0.0)
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+        cerebro.addanalyzer(AccountEquity, _name='account_equity')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
         # 5. 运行
@@ -590,67 +514,32 @@ class BacktestEngine:
         
         # 6. 提取结果
         
-        # 权益曲线
-        timereturns = strat.analyzers.timereturn.get_analysis()
-        
-        equity_curve = []
-        cumulative = 1.0
-        current_equity = initial_cash
-        
-        # TimeReturn 返回的是收益率，我们需要计算净值
-        # Backtrader 的 TimeReturn key 是 datetime 对象
-        for date, ret in timereturns.items():
-            if ret is None:
-                ret = 0.0
-            cumulative *= (1.0 + ret)
-            current_equity = initial_cash * cumulative
-            equity_curve.append({
-                "date": date.strftime("%Y-%m-%d %H:%M:%S"),
-                "value": current_equity,
-                "return": ret
-            })
-            
+        # Use actual broker values and bar timestamps. Compounding TimeReturn
+        # observations can drift, divide by zero after insolvency, and stamp
+        # weekly observations outside the user's visible end-date window.
+        equity_curve = strat.analyzers.account_equity.get_analysis()
+
         # 绩效指标
-        sharpe_analysis = strat.analyzers.sharpe.get_analysis()
-        sharpe = sharpe_analysis.get('sharperatio')
-        if sharpe is None:
-            sharpe = 0.0
-        
-        drawdown_analysis = strat.analyzers.drawdown.get_analysis()
-        max_drawdown = drawdown_analysis.get('max', {}).get('drawdown', 0)
-        
         trade_analysis = strat.analyzers.trades.get_analysis()
-        total_trades = trade_analysis.get('total', {}).get('total', 0)
-        won_trades = trade_analysis.get('won', {}).get('total', 0)
-        lost_trades = trade_analysis.get('lost', {}).get('total', 0)
-        
-        pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
+        settlements = strat.closed_trade_stats
+        total_trades = len(settlements)
+        won_trades = sum(item['net_profit'] > 1e-9 for item in settlements)
+        lost_trades = sum(item['net_profit'] < -1e-9 for item in settlements)
+        flat_trades = total_trades - won_trades - lost_trades
 
         # 新增指标提取
         max_capital_usage = getattr(strat, 'max_capital_usage', 0.0)
         max_profit_points = getattr(strat, 'max_profit_points', 0.0)
         max_loss_points = getattr(strat, 'max_loss_points', 0.0)
         
-        # 使用手数
-        actual_max_size = getattr(strat, 'max_pos_size', 0)
-        used_size = actual_max_size if actual_max_size > 0 else '动态'
-        
-        # 如果没有实际交易或 size 为 0，回退到参数
-        if used_size == '动态' or used_size == 0:
-            size_mode = strategy_params.get('size_mode')
-            if size_mode == 'fixed' or not size_mode: # Default to fixed if not present
-                try:
-                    fixed_size = int(strategy_params.get('fixed_size', 20)) # Default 20
-                    used_size = fixed_size
-                except:
-                    used_size = '未知'
-        
+        used_size = getattr(strat, 'max_pos_size', 0)
+
         # 一手最终赚钱数 (每手净利润)
         # 使用累计的 (PnL/Size) 之和，这样即使 size 变化也能正确反映"单位手"的盈利能力
         one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
             
-        # 一手盈利百分数 (每手盈利金额 / 开仓价)
-        # 使用累计的 (PnL / (Size * Price)) 之和
+        # Sum of each closed trade's net return on entry notional (not margin,
+        # account return, or compounded return); contract multiplier included.
         one_hand_profit_pct = getattr(strat, 'accum_profit_pct', 0.0) * 100.0
 
         # 准备 K 线数据
@@ -811,6 +700,12 @@ class BacktestEngine:
             except:
                 pass
 
+        if 'exit_period' in strategy_params:
+            p = int(strategy_params['exit_period'])
+            kline_data['ma']['strategy_exit'] = close_series.rolling(window=p, min_periods=p).mean().reindex(df_kline.index).round(2).tolist()
+            kline_data['ma']['strategy_exit_period'] = p
+            kline_data['ma']['strategy_exit_label'] = f'MA{p}'
+
         # 计算 MACD (无论策略是否使用，都计算以便前端展示)
         try:
             fast_period = int(strategy_params.get('macd_fast', 12))
@@ -876,6 +771,7 @@ class BacktestEngine:
                 return float(obj)
             return obj
 
+        equity_stats = equity_statistics(final_equity_curve, initial_cash, period)
         raw_result = {
             "status": "success",
             "data_info": {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
@@ -886,15 +782,23 @@ class BacktestEngine:
             "kline_data": kline_data,
             "trades": final_trades,
             "metrics": {
+                "calculation_version": METRICS_VERSION,
+                "commission_rate": COMMISSION_RATE,
+                "accounting_model": 'entry_margin_mark_to_market' if market_type == 'futures' else 'stock_lots',
                 "initial_cash": initial_cash,
                 "final_value": cerebro.broker.getvalue(),
                 "net_profit": cerebro.broker.getvalue() - initial_cash,
-                "sharpe_ratio": sharpe,
-                "max_drawdown": max_drawdown,
+                "return_rate": (cerebro.broker.getvalue() / initial_cash - 1) * 100,
+                "sharpe_ratio": equity_stats['sharpe_ratio'],
+                "max_drawdown": equity_stats['max_drawdown'],
                 "total_trades": total_trades,
                 "win_rate": (won_trades / total_trades * 100) if total_trades > 0 else 0,
                 "won_trades": won_trades,
                 "lost_trades": lost_trades,
+                "flat_trades": flat_trades,
+                "open_trades": trade_analysis.get('total', {}).get('open', 0),
+                "total_commission": strat.total_commission,
+                "realized_net_profit": sum(item['net_profit'] for item in settlements),
                 "used_size": used_size,
                 "max_capital_usage": max_capital_usage * 100,
                 "one_hand_net_profit": one_hand_net_profit,
@@ -1012,6 +916,7 @@ class BacktestEngine:
                     continue
 
                 cerebro = bt.Cerebro()
+                cerebro.setbroker(SignalDelayBroker(**execution_delay_params(strategy_params)))
                 # 禁用标准输出
                 cerebro.check = False
                 
@@ -1021,7 +926,7 @@ class BacktestEngine:
                 # 设置初始资金 (足够大以避免margin问题)
                 cerebro.broker.setcash(10000000.0)
                 # 设置手续费
-                cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
+                configure_accounting(cerebro.broker, strategy_params, market_type)
 
                 data = bt.feeds.PandasData(dataname=df)
 
@@ -1287,11 +1192,12 @@ class BacktestEngine:
                 total_bars = len(df)
 
                 cerebro = bt.Cerebro()
+                cerebro.setbroker(SignalDelayBroker(**execution_delay_params(strategy_params)))
                 cerebro.check = False
                 if use_optimal_entry:
                     cerebro.broker.set_coo(True)
                 cerebro.broker.setcash(10000000.0)
-                cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
+                configure_accounting(cerebro.broker, strategy_params, market_type)
 
                 data = bt.feeds.PandasData(dataname=df)
                 cerebro.adddata(data)

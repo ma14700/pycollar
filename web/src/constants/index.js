@@ -2,6 +2,9 @@ export const strategyNameMap = {
   'MA55BreakoutStrategy': 'MA55突破+背离离场',
   'MA55TouchExitStrategy': 'MA55突破+触碰平仓',
   'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',
+  'MA20MA144LongOnlyStrategy': '20/144金叉做多·20/55死叉离场',
+  'MA20MA144ShortOnlyStrategy': '20/144死叉做空·20/55金叉离场',
+  'MA20MA144LongShortStrategy': '20/144多空入场·20/55交叉离场',
   'StockMA20MA55LongOnlyStrategy': '20/55双均线多头(股票)',
   'MA20MA55PartialTakeProfitStrategy': '20/55双均线+盈利平半仓',
   'DKXStrategy': 'DKX多空线策略',
@@ -74,6 +77,7 @@ export const futuresMap = {
 
 export const periodMap = {
   'daily': '日线',
+  'weekly': '周线',
   '60': '60分钟',
   '30': '30分钟',
   '15': '15分钟',

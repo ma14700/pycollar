@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Collapse, Tabs, Badge, Tag, Typography, Progress, Button, Tooltip } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons';
 import SingleBacktestResult from './SingleBacktestResult';
+import { accountReturn } from '../../utils/contractEstimate';
 
 const { Panel } = Collapse;
 const { Text } = Typography;
@@ -71,7 +72,7 @@ const BatchBacktestResult = ({ results, symbols = [], isFullScreen, onToggleFull
                       净利: {metrics.net_profit?.toLocaleString()}
                     </Tag>
                     <Tag color={metrics.net_profit > 0 ? 'red' : 'green'}>
-                      收益: {(metrics.one_hand_profit_pct !== undefined && metrics.one_hand_profit_pct !== null) ? metrics.one_hand_profit_pct.toFixed(2) : metrics.return_rate?.toFixed(2)}%
+                      账户收益: {accountReturn(metrics)?.toFixed(2) ?? '—'}%
                     </Tag>
                     <Tag>回撤: {metrics.max_drawdown?.toFixed(2)}%</Tag>
                   </>
