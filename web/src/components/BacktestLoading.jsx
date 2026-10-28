@@ -49,7 +49,7 @@ const BacktestLoading = ({ run }) => {
             <div className="backtest-wait-icon"><LineChartOutlined /></div>
             <div>
                 <h2>正在回测你的策略<span className="backtest-wait-dots" aria-hidden="true"><i /><i /><i /></span></h2>
-                <p>{elapsed >= 30 ? '行情读取或策略计算需要一些时间，请保持页面打开。' : '正在获取历史行情并执行策略，完成后将自动展示结果。'}</p>
+                <p>{elapsed >= 30 ? '行情读取或策略计算需要一些时间，可切换侧边栏，任务会继续执行。' : '可先切换侧边栏浏览其他页面，回来时继续查看进度或回测结果。'}</p>
             </div>
         </div>
 

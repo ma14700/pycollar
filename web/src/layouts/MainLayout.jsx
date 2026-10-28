@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layout, Menu } from 'antd';
+import { Button, Layout, Menu } from 'antd';
 import { 
   DashboardOutlined, 
   LineChartOutlined, 
@@ -9,15 +9,20 @@ import {
   BulbOutlined,
   FundViewOutlined,
   ReadOutlined,
-  ScanOutlined
+  ScanOutlined,
+  LoadingOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useBacktest } from '../context/BacktestContext';
 
 const { Header, Content, Sider } = Layout;
 
 const MainLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { loading, activeRun } = useBacktest();
 
   // 映射路径到 Menu Key
   const getSelectedKey = () => {
@@ -80,6 +85,12 @@ const MainLayout = () => {
         <div style={{ fontSize: '20px', fontWeight: 'bold', letterSpacing: '1px' }}>
           AI 量化策略回测平台
         </div>
+        {activeRun && location.pathname !== '/backtest' && <Button type="text"
+            onClick={() => navigate('/backtest')}
+            icon={loading ? <LoadingOutlined spin /> : activeRun.failed || activeRun.status === 'failed' ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
+            style={{ marginLeft: 'auto', color: 'white', background: 'rgba(255,255,255,.12)' }}>
+            {loading ? `回测中 ${activeRun.completed}/${activeRun.total}` : activeRun.status === 'failed' ? '回测失败' : activeRun.failed ? '回测完成（部分失败）' : '回测已完成'} · 返回查看
+        </Button>}
       </Header>
       <Content style={{ padding: '0', backgroundColor: '#f0f2f5', overflow: 'hidden' }}>
         <Layout style={{ height: 'calc(100vh - 64px)', background: '#f0f2f5' }}>

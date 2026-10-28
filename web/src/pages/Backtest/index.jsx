@@ -19,6 +19,7 @@ import DataSourceInfo from '../../components/DataSourceInfo';
 import { buildBacktestSaveRequests } from '../../utils/backtestSave';
 import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets } from '../../utils/contractBacktest';
 import BacktestLoading from '../../components/BacktestLoading';
+import { getMA144ExitStrategy, ma144ExitStrategyOptions } from '../../utils/ma144ExitStrategies';
 
 import SingleBacktestResult from './SingleBacktestResult';
 import BatchBacktestResult from './BatchBacktestResult';
@@ -26,23 +27,23 @@ import BatchBacktestResult from './BatchBacktestResult';
 const { Option } = Select;
 
 const BacktestPage = () => {
-  const { results, setResults, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType } = useBacktest();
-  const [loading, setLoading] = useState(false);
-  const [activeRun, setActiveRun] = useState(null);
+  const { results, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType,
+    loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams } = useBacktest();
   const [form] = Form.useForm();
   const [defaultDateRange] = useState(() => [
     dayjs('2025-01-01'),
     dayjs(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })),
   ]);
   const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA55BreakoutStrategy');
-  const isMA144SignalStrategy = ['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(strategyType);
-  const isShortMA144Strategy = strategyType === 'MA20MA144ShortOnlyStrategy';
-  const isLongShortMA144Strategy = strategyType === 'MA20MA144LongShortStrategy';
+  const ma144ExitStrategy = getMA144ExitStrategy(strategyType);
+  const isMA144ReversalStrategy = Boolean(ma144ExitStrategy?.reverses);
+  const ma144ExitPeriod = ma144ExitStrategy ? 144 : 55;
+  const isMA144SignalStrategy = Boolean(ma144ExitStrategy) || ['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(strategyType);
+  const isShortMA144Strategy = ['MA20MA144ShortOnlyStrategy', 'MA20MA144CrossExitShortOnlyStrategy'].includes(strategyType);
+  const isLongShortMA144Strategy = ['MA20MA144LongShortStrategy', 'MA20MA144CrossExitLongShortStrategy'].includes(strategyType);
   const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(strategyType);
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
-  const [autoOptimize, setAutoOptimize] = useState(false);
-  const [currentParams, setCurrentParams] = useState(null);
   const [isFullScreen, setIsFullScreen] = useState(false);
   
   // Local cache for lists to avoid repeated API calls if we were to move this to context fully
@@ -90,6 +91,27 @@ const BacktestPage = () => {
 
   // Fetch symbols on mount
   useEffect(() => {
+    let active = true;
+    // Restore the submitted form immediately, even while catalog requests are pending.
+    if (savedFormValues) {
+        const marketType = savedFormValues.market_type || 'futures';
+        const initialValues = { ...savedFormValues,
+            date_range: savedFormValues.date_range === undefined ? defaultDateRange : savedFormValues.date_range,
+            entry_delay_bars: savedFormValues.entry_delay_bars ?? 1,
+            exit_delay_bars: savedFormValues.exit_delay_bars ?? 1,
+            data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') };
+        if (initialValues.symbol && !Array.isArray(initialValues.symbol)) initialValues.symbol = [initialValues.symbol];
+        initialValues.contract_month = marketType === 'futures' ? normalizeContractMonths(initialValues.contract_month) : [];
+        if (initialValues.contract_month.length) {
+            const window = contractWindow(initialValues.contract_month[0]);
+            initialValues.date_range = initialValues.contract_month.length === 1 ? [dayjs(window.start_date), dayjs(window.end_date)] : null;
+            initialValues.data_provider = 'tqsdk';
+            initialValues.data_source = 'main';
+        }
+        form.setFieldsValue(initialValues);
+    } else {
+        form.setFieldsValue({ market_type: 'futures', period: 'daily', initial_cash: 1000000 });
+    }
     const fetchData = async () => {
       try {
         const [futuresRes, stockRes] = await Promise.all([
@@ -99,62 +121,37 @@ const BacktestPage = () => {
         
         const fList = futuresRes.data.futures || [];
         const sList = stockRes.data.stocks || [];
+        if (!active) return;
         
         setFuturesList(fList);
         setStockList(sList);
         
-        if (savedFormValues) {
-            const marketType = savedFormValues.market_type || 'futures';
+        const currentValues = form.getFieldsValue(true);
+        const marketType = currentValues.market_type || 'futures';
+        if (savedFormValues || currentValues.symbol?.length) {
             const list = marketType === 'stock' ? sList : fList;
             setSymbols(list || []);
-
-            // 确保 symbol 是数组，兼容旧的单选配置
-            const initialValues = { ...savedFormValues,
-                date_range: savedFormValues.date_range === undefined ? defaultDateRange : savedFormValues.date_range,
-                entry_delay_bars: savedFormValues.entry_delay_bars ?? 1,
-                exit_delay_bars: savedFormValues.exit_delay_bars ?? 1,
-                data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') };
-            if (initialValues.symbol && !Array.isArray(initialValues.symbol)) {
-                initialValues.symbol = [initialValues.symbol];
-            }
-            initialValues.contract_month = marketType === 'futures' ? normalizeContractMonths(initialValues.contract_month) : [];
-            if (initialValues.contract_month.length) {
-                const window = contractWindow(initialValues.contract_month[0]);
-                initialValues.date_range = initialValues.contract_month.length === 1 ? [dayjs(window.start_date), dayjs(window.end_date)] : null;
-                initialValues.data_provider = 'tqsdk';
-                initialValues.data_source = 'main';
-            }
-
-            form.setFieldsValue(initialValues);
-            
             // 强制刷新 multiplier (防止保存的旧值有误)
-            if (initialValues.symbol && initialValues.symbol.length === 1) {
-                const targetSymbolCode = Array.isArray(initialValues.symbol) ? initialValues.symbol[0] : initialValues.symbol;
-                const targetSymbol = list.find(s => s.code === targetSymbolCode);
+            if (currentValues.symbol && currentValues.symbol.length === 1) {
+                const targetSymbol = list.find(s => s.code === currentValues.symbol[0]);
                 if (targetSymbol) {
                     form.setFieldsValue({ contract_multiplier: targetSymbol.multiplier });
                 }
             }
-            fetchQuote(initialValues.symbol);
+            fetchQuote(currentValues.symbol);
         } else {
             // Initialize with futures
-            switchSymbols('futures', fList, sList);
+            switchSymbols(marketType, fList, sList);
         }
       } catch (err) {
+        if (!active) return;
         console.error(err);
         message.error('无法连接到后端服务获取品种数据');
       }
     };
     fetchData();
     
-    // Set initial form values
-    if (!savedFormValues) {
-        form.setFieldsValue({
-            market_type: 'futures',
-            period: 'daily',
-            initial_cash: 1000000
-        });
-    }
+    return () => { active = false; ++quoteRequestId.current; };
   }, []);
 
   const switchSymbols = (marketType, fList = futuresList, sList = stockList) => {
@@ -267,19 +264,6 @@ const BacktestPage = () => {
         return;
     }
 
-    setActiveRun({ total: targets.length, completed: 0, failed: 0, startedAt: Date.now(),
-        strategy: strategyType, period: values.period, provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
-        symbol: targets[0].symbol, unit: normalizeContractMonths(values.contract_month).length ? '合约' : '品种' });
-    setLoading(true);
-    setResults(null); // Clear previous results
-
-    // 如果是单个品种，保持原有逻辑（但为了统一，可以视为长度为1的批量）
-    // 为了更好的用户体验，如果只选了一个，直接展示结果，不显示折叠面板
-    // 如果选了多个，则使用新逻辑
-
-    const batchResults = [];
-    let completedCount = 0;
-
     try {
       let params = {};
       const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
@@ -306,7 +290,7 @@ const BacktestPage = () => {
         params = {
           fast_period: 20,
           slow_period: 144,
-          exit_period: 55,
+          exit_period: ma144ExitPeriod,
           size_mode: 'fixed',
           fixed_size: Number(values.fixed_size || 20),
           margin_rate: marginRate,
@@ -467,9 +451,8 @@ const BacktestPage = () => {
       params.exit_delay_bars = Number(values.exit_delay_bars);
       setCurrentParams(params);
 
-      // 批量执行逻辑
-      // 为每个品种构建 payload
-      for (const target of targets) {
+      // Capture every request before handing the queue to the app-level task.
+      const tasks = targets.map(target => {
           const symbolCode = target.base_symbol;
           // 获取品种特定的 multiplier
           const symbolObj = symbols.find(s => s.code === symbolCode);
@@ -495,59 +478,16 @@ const BacktestPage = () => {
             payload.end_date = values.date_range[1].format('YYYY-MM-DD');
           }
           payload = applyContractBacktest(payload, target.contract_month);
-          setActiveRun(previous => ({ ...previous, symbol: payload.symbol,
-              symbolName: symbolObj?.name?.match(/\(([^)]+)\)/)?.[1] || symbolObj?.name,
-              provider: payload.data_provider }));
-
-          try {
-              // 串行执行以避免并发问题 (如果后端支持，可以改为 Promise.all)
-              const response = await axios.post('http://localhost:8000/api/backtest', payload);
-              batchResults.push({
-                  symbol: payload.symbol,
-                  success: true,
-                  data: { ...response.data, backtest_request: payload }
-              });
-          } catch (err) {
-              console.error(`Backtest failed for ${payload.symbol}:`, err);
-              batchResults.push({
-                  symbol: payload.symbol,
-                  success: false,
-                  error: err.response?.data?.detail || err.message
-              });
-          }
-
-          completedCount++;
-          setActiveRun(previous => ({ ...previous, completed: completedCount,
-              failed: batchResults.filter(item => !item.success).length }));
-      }
-      
-      // 处理结果
-      if (batchResults.length === 1) {
-          if (batchResults[0].success) {
-              setResults(batchResults[0].data);
-              message.success('回测完成');
-          } else {
-              message.error(`回测失败: ${batchResults[0].error}`);
-          }
-      } else {
-          // 多品种结果
-          setResults({
-              isBatch: true,
-              items: batchResults,
-              summary: {
-                  total: batchResults.length,
-                  success: batchResults.filter(r => r.success).length,
-                  failed: batchResults.filter(r => !r.success).length
-              }
-          });
-          message.success(`批量回测完成: 成功 ${batchResults.filter(r => r.success).length}/${batchResults.length}`);
-      }
+          return { payload, symbolName: symbolObj?.name?.match(/\(([^)]+)\)/)?.[1] || symbolObj?.name };
+      });
+      setSavedFormValues({ ...values });
+      await startBacktest({ tasks, strategy: strategyType, period: values.period,
+        provider: tasks[0].payload.data_provider,
+        unit: normalizeContractMonths(values.contract_month).length ? '合约' : '品种' });
 
     } catch (error) {
       console.error(error);
       message.error('执行出错: ' + error.message);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -692,9 +632,9 @@ const BacktestPage = () => {
                         // 切换策略时重置默认值
                         if (['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(val)) {
                             form.setFieldsValue({ fast_period: 20, slow_period: 55, size_mode: 'fixed', fixed_size: 20 });
-                        } else if (['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(val)) {
+                        } else if (getMA144ExitStrategy(val) || ['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(val)) {
                             setAutoOptimize(false);
-                            form.setFieldsValue({ fast_period: 20, slow_period: 144, exit_period: 55, size_mode: 'fixed', fixed_size: 20 });
+                            form.setFieldsValue({ fast_period: 20, slow_period: 144, exit_period: getMA144ExitStrategy(val) ? 144 : 55, size_mode: 'fixed', fixed_size: 20 });
                         } else if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
                             let initialValues = {
                                 atr_period: 14,
@@ -780,6 +720,7 @@ const BacktestPage = () => {
                                 stop_loss_points: 50
                             });
                         }
+                        setSavedFormValues(form.getFieldsValue(true));
                     }}>
                         <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                         <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
@@ -790,6 +731,7 @@ const BacktestPage = () => {
                         <Option value="MA20MA144LongOnlyStrategy">20/144金叉做多·20/55死叉离场</Option>
                         <Option value="MA20MA144ShortOnlyStrategy">20/144死叉做空·20/55金叉离场</Option>
                         <Option value="MA20MA144LongShortStrategy">20/144多空入场·20/55交叉离场</Option>
+                        {ma144ExitStrategyOptions.map(option => <Option key={option.value} value={option.value}>{option.label}</Option>)}
                         <Option value="MA5MA20CrossoverStrategy">5/20双均线交叉(多空)</Option>
                         <Option value="MA5MA55CrossoverStrategy">5/55日均线多空交叉</Option>
                         <Option value="MA20MA55RiskRewardStrategy">20/55双均线+盈亏比优化</Option>
@@ -809,8 +751,8 @@ const BacktestPage = () => {
                 {isMA144SignalStrategy && (
                     <Alert
                         type="info" showIcon style={{ marginBottom: 16 }}
-                        message={isLongShortMA144Strategy ? 'MA20 / MA144 金叉做多、死叉做空；MA20 / MA55 反向交叉离场' : isShortMA144Strategy ? 'MA20 / MA144 死叉开空，MA20 / MA55 金叉离场' : 'MA20 / MA144 金叉开多，MA20 / MA55 死叉离场'}
-                        description={`${isLongShortMA144Strategy ? '空仓时金叉开多、死叉开空；多单在 MA20 下穿 MA55 时离场，空单在 MA20 上穿 MA55 时离场。不加仓，持仓期间只按离场规则处理，不直接反手；平仓成交后等待新的 MA20/144 交叉。' : isShortMA144Strategy ? '仅做空，不加仓；离场后等待下一次 MA20 下穿 MA144。' : '仅做多，不加仓；离场后等待下一次 MA20 上穿 MA144。'}均线按所选 K 线周期计算，日线下为 20 / 55 / 144 日均线。信号收盘确认，按开仓 / 平仓 K 线设置等待成交，回测末尾沿用平台平仓规则。`}
+                        message={isMA144ReversalStrategy ? 'MA20 / MA144 金叉平空开多，死叉平多开空（反手）' : isLongShortMA144Strategy ? `MA20 / MA144 金叉做多、死叉做空；MA20 / MA${ma144ExitPeriod} 反向交叉离场` : isShortMA144Strategy ? `MA20 / MA144 死叉开空，MA20 / MA${ma144ExitPeriod} 金叉离场` : `MA20 / MA144 金叉开多，MA20 / MA${ma144ExitPeriod} 死叉离场`}
+                        description={`${isMA144ReversalStrategy ? '空仓时金叉开多、死叉开空；持有多单遇死叉时平多并开空，持有空单遇金叉时平空并开多。反手后保持设定的固定手数，不加仓；反手订单按开仓、平仓 K 线设置的较大值等待成交。' : isLongShortMA144Strategy ? `空仓时金叉开多、死叉开空；多单在 MA20 下穿 MA${ma144ExitPeriod} 时离场，空单在 MA20 上穿 MA${ma144ExitPeriod} 时离场。不加仓，持仓期间只按离场规则处理，不直接反手；平仓成交后等待新的 MA20/144 交叉。` : isShortMA144Strategy ? '仅做空，不加仓；离场后等待下一次 MA20 下穿 MA144。' : '仅做多，不加仓；离场后等待下一次 MA20 上穿 MA144。'}均线按所选 K 线周期计算，日线下为 ${ma144ExitStrategy ? '20 / 144' : '20 / 55 / 144'} 日均线。信号收盘确认，按开仓 / 平仓 K 线设置等待成交，回测末尾沿用平台平仓规则。`}
                     />
                 )}
 
@@ -1158,7 +1100,9 @@ const BacktestPage = () => {
             </Col>
             
             <Col span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
-            {loading && activeRun ? <BacktestLoading run={activeRun} /> : results ? (
+            {loading && activeRun ? <BacktestLoading run={activeRun} /> : runError ? (
+                <Alert type="error" showIcon message="回测失败" description={runError} />
+            ) : results ? (
                 results.isBatch ? (
                     <BatchBacktestResult
                         results={results}

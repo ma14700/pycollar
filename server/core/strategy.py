@@ -393,6 +393,31 @@ class MA20MA144LongShortStrategy(MA20MA144LongOnlyStrategy):
             self.order = self.sell(size=self.p.fixed_size)
 
 
+class MA20MA144CrossExitLongOnlyStrategy(MA20MA144LongOnlyStrategy):
+    """MA20/144 金叉开多，同一组均线死叉平多。"""
+    params = (('exit_period', 144),)
+
+
+class MA20MA144CrossExitShortOnlyStrategy(MA20MA144ShortOnlyStrategy):
+    """MA20/144 死叉开空，同一组均线金叉平空。"""
+    params = (('exit_period', 144),)
+
+
+class MA20MA144CrossExitLongShortStrategy(MA20MA144LongShortStrategy):
+    """MA20/144 金叉平空开多，死叉平多开空，按固定目标手数反手。"""
+    params = (('exit_period', 144),)
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.entry_cross > 0:
+            self.log(f'金叉信号: MA{self.p.fast_period} 上穿 MA{self.p.slow_period}，平空开多')
+            self.order = self.order_target_size(target=self.p.fixed_size)
+        elif self.entry_cross < 0:
+            self.log(f'死叉信号: MA{self.p.fast_period} 下穿 MA{self.p.slow_period}，平多开空')
+            self.order = self.order_target_size(target=-self.p.fixed_size)
+
+
 class DualMAFixedTPSLStrategy(BaseStrategy):
     """
     20/55双均线交叉(多空) + 固定止盈止损策略

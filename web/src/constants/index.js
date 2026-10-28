@@ -1,4 +1,7 @@
+import { ma144ExitStrategyOptions } from '../utils/ma144ExitStrategies.js';
+
 export const strategyNameMap = {
+  ...Object.fromEntries(ma144ExitStrategyOptions.map(option => [option.value, option.label])),
   'MA55BreakoutStrategy': 'MA55突破+背离离场',
   'MA55TouchExitStrategy': 'MA55突破+触碰平仓',
   'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',

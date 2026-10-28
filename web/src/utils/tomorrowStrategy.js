@@ -1,4 +1,7 @@
+import { ma144ExitStrategyOptions } from './ma144ExitStrategies.js';
+
 export const tomorrowStrategyOptions = [
+    ...ma144ExitStrategyOptions,
     { value: 'MA55BreakoutStrategy', label: 'MA55突破（多空反手）', defaults: { ma_period: 55 } },
     { value: 'MA55TouchExitStrategy', label: 'MA55突破+触碰平仓', defaults: { ma_period: 55 } },
     { value: 'MA20MA55CrossoverStrategy', label: '20/55双均线交叉(多空)', defaults: { fast_period: 20, slow_period: 55 } },
