@@ -5,6 +5,7 @@ import datetime
 import importlib
 from .data_loader import fetch_data
 from . import strategy
+from .constants import get_multiplier
 
 class StrategyData(bt.feeds.PandasData):
     lines = ('ma_fast', 'ma_slow',)
@@ -25,11 +26,23 @@ class BacktestEngine:
         # StrategyClass.params 是 AutoInfoClass 实例，包含所有继承链上的参数默认值
         for k, v in params.items():
             if hasattr(StrategyClass.params, k):
+                if v is None or v == '':
+                    continue
+                default = getattr(StrategyClass.params, k)
+                if isinstance(default, bool) and isinstance(v, str):
+                    if v.lower() not in ('true', 'false'):
+                        raise ValueError(f'策略参数 {k} 必须为布尔值')
+                    v = v.lower() == 'true'
+                elif isinstance(default, (int, float)) and not isinstance(default, bool):
+                    number = float(v)
+                    if not np.isfinite(number) or (isinstance(default, int) and not number.is_integer()):
+                        raise ValueError(f'策略参数 {k} 数值无效')
+                    v = int(number) if isinstance(default, int) else number
                 valid_params[k] = v
         
         return valid_params
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare'):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None):
         strategy_params = strategy_params.copy()
         print("DEBUG: Engine.run called with Modified Code")
         # 强制重载策略模块，确保使用最新代码
@@ -37,14 +50,16 @@ class BacktestEngine:
         
         # 获取策略类
         if not hasattr(strategy, strategy_name):
-             # 尝试使用默认策略
-             if hasattr(strategy, 'TrendFollowingStrategy'):
-                 print(f"警告: 未找到策略 '{strategy_name}'。将使用默认策略 'TrendFollowingStrategy'。")
-                 strategy_name = 'TrendFollowingStrategy'
-             else:
-                 return {"error": f"未在代码中找到策略类 '{strategy_name}'。"}
+            return {"error": f"未在代码中找到策略类 '{strategy_name}'。"}
         
         StrategyClass = getattr(strategy, strategy_name)
+        try:
+            optimal_entry = strategy_params.get('optimal_entry', False)
+            strategy_params = {**dict(StrategyClass.params._getitems()),
+                               **self._filter_params(StrategyClass, strategy_params)}
+            strategy_params['optimal_entry'] = optimal_entry
+        except (ValueError, TypeError) as error:
+            return {"error": f"策略参数无效: {error}"}
 
         # 继承策略以捕获日志 (动态继承)
         class LoggingStrategy(StrategyClass):
@@ -58,6 +73,7 @@ class BacktestEngine:
                 self.current_mdd_price = None
                 self.current_mdd_date = None
                 self.entry_price = None # 当前持仓的平均开仓价 (用于计算回撤幅度)
+                self.position_entry_bar = None
                 
                 # 新增统计指标
                 self.max_capital_usage = 0.0
@@ -115,7 +131,12 @@ class BacktestEngine:
                 self.accum_profit_per_hand = 0.0
                 self.accum_profit_pct = 0.0
                 self.sum_entry_price = 0.0
+                self.sum_margin_per_hand = 0.0 # 累计每手保证金 (用于计算平均保证金)
                 self.closed_trade_count = 0
+                
+                # 用于计算平均持仓手数
+                self.sum_holding_size = 0.0
+                self.holding_bar_count = 0
                 
                 self.max_trade_pnl = -float('inf')
                 self.min_trade_pnl = float('inf')
@@ -166,18 +187,20 @@ class BacktestEngine:
                         # 累计每手净利润
                         self.accum_profit_per_hand += pnl / size
                         
-                        # 累计盈利百分比 (基于开仓价)
-                        # 用户定义逻辑：(总每手净利润 / 平均开仓价格)
-                        # 这里只更新 sum_entry_price，最终百分比在 stop() 或 run() 结束时计算
-                        # 但为了实时更新 metrics，我们在这里计算当前状态
+                        # 累计盈利百分比 (基于保证金 ROE)
+                        # 用户定义逻辑：总收益率 = sum(单笔收益 / 单笔保证金)
                         if trade.price > 0:
-                            self.sum_entry_price += trade.price
-                            self.closed_trade_count += 1
+                            margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                            margin_per_hand = trade.price * multiplier * margin_rate
                             
-                            # Calculate Aggregate Percentage
-                            avg_entry_price = self.sum_entry_price / self.closed_trade_count
-                            if avg_entry_price > 0:
-                                self.accum_profit_pct = (self.accum_profit_per_hand / avg_entry_price)
+                            if margin_per_hand > 0:
+                                self.sum_margin_per_hand += margin_per_hand
+                                self.closed_trade_count += 1
+                                
+                                trade_profit_per_hand = pnl / size
+                                trade_pct = trade_profit_per_hand / margin_per_hand
+                                # Accumulate pure profit percentage for metrics
+                                self.accum_profit_pct += trade_pct
                         
                         # 记录最大盈利交易的点数
                         if pnl > self.max_trade_pnl:
@@ -208,7 +231,13 @@ class BacktestEngine:
                     self.max_capital_usage = max(self.max_capital_usage, usage)
 
                 # 记录最大持仓
-                self.max_pos_size = max(self.max_pos_size, abs(self.position.size))
+                curr_size = abs(self.position.size)
+                self.max_pos_size = max(self.max_pos_size, curr_size)
+                
+                # 记录持仓累积值 (用于计算平均持仓手数)
+                if curr_size > 0:
+                    self.sum_holding_size += curr_size
+                    self.holding_bar_count += 1
 
                 # 记录最大回撤点位 (在 super().next() 之前或之后均可，这里选择之前以捕获当前bar)
                 # 注意：Backtrader 的 next 在 bar 关闭时调用，所以 datas[0] 是当前结束的 bar
@@ -246,7 +275,8 @@ class BacktestEngine:
                 log_entry = f'{dt.isoformat()}, {txt}'
                 self.logs.append(log_entry)
                 # 同时打印到控制台以便调试
-                print(log_entry)
+                if self.params.print_log:
+                    print(log_entry)
 
             def notify_order(self, order):
                 if order.status in [order.Submitted, order.Accepted]:
@@ -269,6 +299,11 @@ class BacktestEngine:
                     # 确保数值比较的稳定性
                     if abs(prev_pos) < 1e-9: prev_pos = 0
                     if abs(current_pos) < 1e-9: current_pos = 0
+                    opens_position = current_pos != 0 and (prev_pos == 0 or prev_pos * current_pos < 0)
+                    if opens_position:
+                        self.position_entry_bar = len(self)
+                    elif current_pos == 0:
+                        self.position_entry_bar = None
                     
                     # 维护 entry_price 逻辑
                     recorded_entry_price = self.entry_price # 默认使用当前记录的成本价
@@ -358,6 +393,7 @@ class BacktestEngine:
                         "price": float(price),
                         "size": float(size),
                         "position": float(current_pos),  # 添加当前持仓量
+                        "opens_position": opens_position,
                         "mdd_price": final_mdd_price, # 当前持仓期间的最大回撤价格
                         "mdd_date": self.current_mdd_date if final_mdd_price is not None else None,    # 最大回撤发生的日期
                         "entry_price": final_entry_price, # 对应的开仓均价
@@ -398,12 +434,34 @@ class BacktestEngine:
                             if implied_entry > 0:
                                 # 2. Calculate Pct using Net PnL (pnl_val)
                                 profit_per_hand_net = pnl_val / exec_size
-                                pct = (profit_per_hand_net / implied_entry)
-                                pnl_str += f", 收益率: {pct*100:.2f}%"
-
-                                # Accumulate
-                                self.accum_profit_per_hand += profit_per_hand_net
-                                self.accum_profit_pct += pct
+                                margin_rate = getattr(self.p, 'margin_rate', 0.1)
+                                
+                                # Use ROE (Return on Margin) = NetProfit / Margin
+                                # Margin = EntryPrice * Multiplier * MarginRate
+                                margin_per_hand = implied_entry * multiplier * margin_rate
+                                
+                                if margin_per_hand > 0:
+                                    pct = (profit_per_hand_net / margin_per_hand)
+                                    # User Request: Add 100% to reflect (Capital + Profit) / Capital
+                                    # However, usually ROE is just Profit/Capital. 
+                                    # If user wants 100% base, it means Gross Return.
+                                    # Let's just follow instruction: add 1.0 to the ratio.
+                                    # Wait, if loss is -50%, result should be 50% remaining?
+                                    # Or is it just adding 100% to the *display*?
+                                    # "一手盈利百分数" implies Profit Percentage. 
+                                    # If I make 10% profit, display 110%? That sounds like "Final Value %".
+                                    # Assuming user wants "Total Return %" where 100% is breakeven.
+                                    # Let's modify the logging first.
+                                    
+                                    display_pct = (1 + pct) * 100
+                                    pnl_str += f", 收益率: {display_pct:.2f}% (含本)"
+                                    
+                                    # Accumulate
+                                    self.accum_profit_per_hand += profit_per_hand_net
+                                    # Note: self.accum_profit_pct is updated in notify_trade for simplicity 
+                                    # but here we just log it. 
+                                    # Actually, let's update accumulation here if we trust implied_entry more?
+                                    # No, notify_trade has the real trade object. Let's stick to logging here.
                         except Exception:
                             pass
 
@@ -435,6 +493,9 @@ class BacktestEngine:
                 
                 elif order.status in [order.Canceled, order.Margin, order.Rejected]:
                     self.log('订单已取消/保证金不足/被拒绝')
+                
+                # 关键修复: 必须调用父类 notify_order，否则 StrategyClass 中的 notify_order 逻辑（如止盈止损）会被跳过
+                super().notify_order(order)
 
                 self.order = None
 
@@ -478,6 +539,15 @@ class BacktestEngine:
             strategy_params['end_date'] = end_date # 注入结束日期，用于强制平仓
 
             df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source, data_provider=data_provider)
+            if df_raw is not None:
+                df_raw = df_raw.copy()
+                if as_of:
+                    df_raw = df_raw.loc[df_raw.index <= pd.to_datetime(as_of)].copy()
+                if history_start and not df_raw.empty:
+                    first_bar = pd.to_datetime(history_start)
+                    if df_raw.index.min() > first_bar:
+                        raise ValueError('分析时的历史起点已超出当前行情窗口，请重新分析后查看详情')
+                    df_raw = df_raw.loc[df_raw.index >= first_bar].copy()
             
             # 检查数据是否被截断 (数据源起始时间晚于请求时间 2 天以上)
             if start_date and df_raw is not None and not df_raw.empty:
@@ -646,12 +716,45 @@ class BacktestEngine:
                     used_size = '未知'
         
         # 一手最终赚钱数 (每手净利润)
-        # 使用累计的 (PnL/Size) 之和，这样即使 size 变化也能正确反映"单位手"的盈利能力
-        one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
+        # 修正逻辑：使用 (总净利润 / 平均持仓手数)
+        # 这样能反映出"单位资金占用"的产出，且与账户曲线总值对应（只是除以了一个系数）
+        
+        # one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0) # 旧逻辑
+        
+        total_net_profit = cerebro.broker.getvalue() - initial_cash
+        sum_holding_size = getattr(strat, 'sum_holding_size', 0.0)
+        holding_bar_count = getattr(strat, 'holding_bar_count', 0)
+        
+        avg_holding_size = 0.0
+        if holding_bar_count > 0:
+            avg_holding_size = sum_holding_size / holding_bar_count
+            
+        if avg_holding_size > 0:
+            one_hand_net_profit = total_net_profit / avg_holding_size
+        else:
+            # 如果没有持仓记录（可能是没开仓，或者极短），回退到 accum_profit_per_hand 或者 0
+            one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
             
         # 一手盈利百分数 (每手盈利金额 / 开仓价)
-        # 使用累计的 (PnL / (Size * Price)) 之和
-        one_hand_profit_pct = getattr(strat, 'accum_profit_pct', 0.0) * 100.0
+        # 修正逻辑：(一手最终赚钱数 / 平均一手保证金) + 100%
+        # one_hand_net_profit 是 total sum of (pnl/size)
+        
+        avg_margin_per_hand = 0.0
+        closed_trade_count = getattr(strat, 'closed_trade_count', 0)
+        sum_margin_per_hand = getattr(strat, 'sum_margin_per_hand', 0.0)
+        
+        if closed_trade_count > 0:
+            avg_margin_per_hand = sum_margin_per_hand / closed_trade_count
+            
+        one_hand_profit_pct = 0.0
+        if avg_margin_per_hand > 0:
+            one_hand_profit_pct = (1 + (one_hand_net_profit / avg_margin_per_hand)) * 100.0
+        elif one_hand_net_profit == 0:
+            one_hand_profit_pct = 100.0 # No trades, just capital
+        
+        # 保留 raw_profit_pct 供调试
+        # raw_profit_pct = getattr(strat, 'accum_profit_pct', 0.0)
+        # one_hand_profit_pct = (1 + raw_profit_pct) * 100.0
 
         # 准备 K 线数据
         # 确保索引是 datetime
@@ -779,37 +882,22 @@ class BacktestEngine:
             "ma144": [round(float(value), 2) if pd.notna(value) else None for value in ma144]
         }
 
-        # 策略自定义均线计算 (用于前端展示策略实际使用的均线)
-        if 'fast_period' in strategy_params:
-            try:
-                p = int(strategy_params['fast_period'])
-                # 根据 ma_type 选择 SMA 或 EMA (默认 SMA)
-                is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
-                
-                if is_ema:
-                    kline_data['ma']['strategy_fast'] = close_series.ewm(span=p, adjust=False).mean().reindex(df_kline.index).round(2).tolist()
-                else:
-                    kline_data['ma']['strategy_fast'] = close_series.rolling(window=p, min_periods=1).mean().reindex(df_kline.index).round(2).tolist()
-                
-                kline_data['ma']['strategy_fast_period'] = p
-                kline_data['ma']['strategy_fast_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
-            except:
-                pass
-
-        if 'slow_period' in strategy_params:
-            try:
-                p = int(strategy_params['slow_period'])
-                is_ema = strategy_params.get('ma_type', 'SMA').upper() == 'EMA'
-                
-                if is_ema:
-                    kline_data['ma']['strategy_slow'] = close_series.ewm(span=p, adjust=False).mean().reindex(df_kline.index).round(2).tolist()
-                else:
-                    kline_data['ma']['strategy_slow'] = close_series.rolling(window=p, min_periods=1).mean().reindex(df_kline.index).round(2).tolist()
-                
-                kline_data['ma']['strategy_slow_period'] = p
-                kline_data['ma']['strategy_slow_label'] = f"{'EMA' if is_ema else 'MA'}{p}"
-            except:
-                pass
+        # Read the executed indicators, including strategy defaults and EMA seeds.
+        for key, attribute, period_key in [('fast', 'ma_fast', 'fast_period'),
+                                            ('slow', 'ma_slow', 'slow_period')]:
+            indicator = getattr(strat, attribute, None)
+            if indicator is not None:
+                values = pd.Series(list(indicator.array), index=df_raw.index).reindex(df_kline.index)
+                label = 'EMA' if isinstance(indicator, bt.ind.EMA) else 'MA'
+                p = getattr(strat.p, period_key)
+                kline_data['ma'][f'strategy_{key}'] = [round(float(v), 2) if pd.notna(v) else None for v in values]
+                kline_data['ma'][f'strategy_{key}_period'] = p
+                kline_data['ma'][f'strategy_{key}_label'] = f'{label}{p}'
+        if getattr(strat, 'ma', None) is not None and hasattr(strat.p, 'ma_period'):
+            values = pd.Series(list(strat.ma.array), index=df_raw.index).reindex(df_kline.index)
+            kline_data['ma']['strategy_fast'] = [round(float(v), 2) if pd.notna(v) else None for v in values]
+            kline_data['ma']['strategy_fast_period'] = strat.p.ma_period
+            kline_data['ma']['strategy_fast_label'] = f'MA{strat.p.ma_period}'
 
         # 计算 MACD (无论策略是否使用，都计算以便前端展示)
         try:
@@ -838,7 +926,7 @@ class BacktestEngine:
                 dkx_period = int(strategy_params.get('dkx_period', 20))
                 dkx_ma_period = int(strategy_params.get('dkx_ma_period', 10))
                 
-                mid = (3 * df_kline['Close'] + df_kline['Low'] + df_kline['Open'] + df_kline['High']) / 6.0
+                mid = (3 * df_raw['Close'] + df_raw['Low'] + df_raw['Open'] + df_raw['High']) / 6.0
 
                 # 计算 DKX (WMA)
                 # DKX = (20*MID + 19*REF(MID,1) + ... + 1*REF(MID,19)) / 210
@@ -851,8 +939,8 @@ class BacktestEngine:
                 madkx_values = dkx_values.rolling(window=dkx_ma_period).mean()
                 
                 kline_data['dkx'] = {
-                    "dkx": dkx_values.fillna(0).tolist(),
-                    "madkx": madkx_values.fillna(0).tolist()
+                    "dkx": dkx_values.reindex(df_kline.index).tolist(),
+                    "madkx": madkx_values.reindex(df_kline.index).tolist()
                 }
             except Exception as e:
                 print(f"DKX Calculation Error: {e}")
@@ -878,6 +966,20 @@ class BacktestEngine:
 
         raw_result = {
             "status": "success",
+            "strategy_info": {"name": strategy_name, "params": filtered_params},
+            "execution_info": {"history_start": str(df_raw.index.min())},
+            "pending_orders": [{"date": df_raw.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
+                                "type": "buy" if order.isbuy() else "sell",
+                                "size": float(order.created.size)}
+                               for order in strat.broker.orders if order.alive() and order.exectype == bt.Order.Market],
+            "position_state": {
+                "size": float(strat.position.size),
+                "direction": "多" if strat.position.size > 0 else "空" if strat.position.size < 0 else "空仓",
+                "price": float(df_raw['Close'].iloc[-1]),
+                "entry_price": float(strat.position.price) if strat.position.size else "-",
+                "hold_bars": len(strat) - strat.position_entry_bar if strat.position.size and strat.position_entry_bar is not None else 0,
+                "profit_points": (float(df_raw['Close'].iloc[-1]) - strat.position.price) * (1 if strat.position.size > 0 else -1) if strat.position.size else "-",
+            },
             "data_info": {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
                           "provider_name": '天勤 TqSdk 免费版' if data_provider == 'tqsdk' else '原有行情',
                           "symbol": symbol, "data_source": data_source, "period": period,
@@ -907,192 +1009,47 @@ class BacktestEngine:
         
         return clean_data(raw_result)
 
-    def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures', data_provider='akshare', data_source='main'):
-        """
-        批量分析策略状态
-        """
-        strategy_params = strategy_params.copy()
-        importlib.reload(strategy)
-        
-        if not hasattr(strategy, strategy_name):
-             if hasattr(strategy, 'TrendFollowingStrategy'):
-                 strategy_name = 'TrendFollowingStrategy'
-             else:
-                 return {"error": f"Strategy '{strategy_name}' not found."}
-        
-        StrategyClass = getattr(strategy, strategy_name)
-        
-        # 简单包装策略以获取最终状态
-        class BatchStrategy(StrategyClass):
-            def __init__(self):
-                self.last_entry_price = "-"
-                self.last_entry_bar_idx = -1 # 记录开仓时的 bar 索引
-                super().__init__()
+    def analyze_detail(self, symbol, period, strategy_params, strategy_name='TrendFollowingStrategy',
+                       market_type='futures', data_provider='akshare', data_source='main',
+                       start_date=None, as_of=None, history_start=None):
+        """Use the backtest executor without liquidating a live strategy at the data boundary."""
+        params = strategy_params.copy()
+        params['disable_auto_close'] = True
+        params.setdefault('print_log', False)
+        params.setdefault('contract_multiplier', get_multiplier(symbol) if market_type == 'futures' else 1)
+        if start_date is None and data_provider != 'tqsdk':
+            days = 1095 if period == 'weekly' else 365
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
+        result = self.run(symbol=symbol, period=period, strategy_params=params,
+                          initial_cash=10000000.0, start_date=start_date,
+                          strategy_name=strategy_name, market_type=market_type,
+                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start)
+        if 'error' not in result:
+            result['analysis_request'] = {
+                'symbol': symbol, 'period': period, 'market_type': market_type,
+                'strategy_name': strategy_name, 'strategy_params': result['strategy_info']['params'].copy(),
+                'data_provider': data_provider, 'data_source': data_source,
+                'start_date': start_date, 'as_of': result['data_info']['end'],
+                'history_start': result['execution_info']['history_start'],
+            }
+        return result
 
-            def notify_order(self, order):
-                if order.status == order.Completed:
-                    # 如果有持仓，记录开仓均价
-                    if self.position.size != 0:
-                        self.last_entry_price = self.position.price
-                        # 记录当前开仓的 bar 索引 (len(self) 返回当前已处理的 bar 数)
-                        # 注意：notify_order 在 bar 结束后触发，此时 len(self) 指向刚结束的 bar
-                        self.last_entry_bar_idx = len(self)
-                    else:
-                        self.last_entry_bar_idx = -1 # 平仓重置
-
-                super().notify_order(order)
-            
-            def pre_next(self):
-                # 覆盖 BaseStrategy.pre_next 以防止回测结束时强制平仓
-                # 仅保留 start_date 检查
-                if self.params.start_date:
-                    current_date = self.datas[0].datetime.date(0)
-                    start_date = self.params.start_date
-                    if isinstance(start_date, str):
-                        try:
-                            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
-                        except:
-                            pass
-                    if isinstance(start_date, datetime.datetime):
-                        start_date = start_date.date()
-                        
-                    if current_date < start_date:
-                        return False
-                return True
-
-            def stop(self):
-                # 记录最终状态
-                self.final_size = self.position.size
-                # 计算持有 K 线数
-                # 当前总 bar 数 = len(self)
-                # 持有数 = 当前 - 开仓时
-                if self.position.size != 0 and self.last_entry_bar_idx > 0:
-                    self.hold_bars = len(self) - self.last_entry_bar_idx
-                else:
-                    self.hold_bars = 0
-
-                if self.position.size != 0:
-                    self.final_entry_price = self.position.price
-                else:
-                    self.final_entry_price = self.last_entry_price
-                
-                if hasattr(super(), 'stop'):
-                    super().stop()
-
+    def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy',
+                      market_type='futures', data_provider='akshare', data_source='main'):
         results = []
-        
-        # Handle optimal_entry
-        use_optimal_entry = strategy_params.pop('optimal_entry', False)
-        
-        # 预先过滤策略参数
-        filtered_strategy_params = self._filter_params(StrategyClass, strategy_params)
-        
-        # 默认回测最近1年数据，确保指标计算充分
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=1095 if period == 'weekly' else 365)).strftime('%Y-%m-%d')
-        if data_provider == 'tqsdk':
-            start_date = None
-
         for symbol in symbols:
             try:
-                # 获取数据
-                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type, data_provider=data_provider, data_source=data_source)
-                
-                if df is not None:
-                    # Ensure lowercase columns for backtrader
-                    df.columns = [c.lower() for c in df.columns]
-                
-                if df is None or df.empty:
-                    results.append({
-                        "symbol": symbol,
-                        "name": symbol, # Placeholder, caller should map name
-                        "price": 0,
-                        "direction": "数据缺失",
-                        "entry_price": "-"
-                    })
-                    continue
-
-                cerebro = bt.Cerebro()
-                # 禁用标准输出
-                cerebro.check = False
-                
-                if use_optimal_entry:
-                    cerebro.broker.set_coo(True)
-                
-                # 设置初始资金 (足够大以避免margin问题)
-                cerebro.broker.setcash(10000000.0)
-                # 设置手续费
-                cerebro.broker.setcommission(commission=0.0001, margin=0.0, mult=int(strategy_params.get('contract_multiplier', 10)))
-
-                data = bt.feeds.PandasData(dataname=df)
-
-                # 针对周线，显式设置 TimeFrame
-                if period == 'weekly':
-                    # 虽然数据已经是周线（Resampled），但为了保险，告诉 Cerebro 这是周线数据
-                    # 不过如果 compression=1, timeframe=Weeks，Cerebro 会认为这是周线
-                    # 关键是数据已经是周频了，所以 timeframe=Weeks, compression=1 是匹配的
-                    # 如果不设置，默认是 Daily? PandasData 不会自动推断 TimeFrame
-                    data = bt.feeds.PandasData(dataname=df, timeframe=bt.TimeFrame.Weeks, compression=1)
-
-                cerebro.adddata(data)
-                
-                # 添加策略
-                cerebro.addstrategy(BatchStrategy, **filtered_strategy_params)
-                
-                # 运行 (不生成图表数据，速度较快)
-                strats = cerebro.run()
-                if not strats:
-                    continue
-                    
-                strat = strats[0]
-                
-                # 获取当前价格
-                current_price = df['close'].iloc[-1]
-                
-                # 判断方向
-                size = getattr(strat, 'final_size', 0)
-                entry_price = getattr(strat, 'final_entry_price', "-")
-                hold_bars = getattr(strat, 'hold_bars', 0)
-                
-                direction = "空仓"
-                color = "default" # default/green/red
-                
-                if size > 0:
-                    direction = "多"
-                elif size < 0:
-                    direction = "空"
-                
-                # 计算盈利点数
-                profit_points = 0
-                if entry_price != "-" and isinstance(entry_price, (int, float)):
-                    if size > 0:
-                        profit_points = current_price - entry_price
-                    elif size < 0:
-                        profit_points = entry_price - current_price
-
+                detail = self.analyze_detail(symbol, period, strategy_params,
+                                             strategy_name, market_type, data_provider, data_source)
+                if 'error' in detail:
+                    raise ValueError(detail['error'])
                 results.append({
-                    "symbol": symbol,
-                    "price": float(current_price),
-                    "direction": direction,
-                    "entry_price": entry_price,
-                    "size": size,
-                    "data_info": df.attrs.get('data_info', {"provider": data_provider, "data_source": data_source}),
-                    "profit_points": profit_points if size != 0 else "-",
-                    "hold_bars": hold_bars
+                    'symbol': symbol, **detail['position_state'],
+                    'data_info': detail['data_info'], 'analysis_request': detail['analysis_request'],
                 })
-                
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"Error analyzing {symbol}: {e}")
-                results.append({
-                    "symbol": symbol,
-                    "error": str(e),
-                    "price": 0, # 填充默认值防止前端空白
-                    "direction": "Error",
-                    "entry_price": "-",
-                    "profit_points": "-"
-                })
-
+            except Exception as error:
+                results.append({'symbol': symbol, 'error': str(error), 'price': 0,
+                                'direction': 'Error', 'entry_price': '-', 'profit_points': '-'})
         return results
 
     def scan_signals(self, symbols, period, scan_window, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures'):

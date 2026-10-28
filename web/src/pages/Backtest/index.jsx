@@ -65,8 +65,15 @@ const BacktestPage = () => {
             }
 
             form.setFieldsValue(initialValues);
+            
+            // 强制刷新 multiplier (防止保存的旧值有误)
             if (initialValues.symbol && initialValues.symbol.length > 0) {
-                fetchQuote(initialValues.symbol);
+                const targetSymbolCode = Array.isArray(initialValues.symbol) ? initialValues.symbol[0] : initialValues.symbol;
+                const targetSymbol = list.find(s => s.code === targetSymbolCode);
+                if (targetSymbol) {
+                    form.setFieldsValue({ contract_multiplier: targetSymbol.multiplier });
+                }
+                fetchQuote(targetSymbolCode);
             }
         } else {
             // Initialize with futures

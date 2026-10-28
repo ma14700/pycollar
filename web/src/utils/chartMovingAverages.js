@@ -19,7 +19,12 @@ export function buildMovingAverageSeries(kline = {}) {
     if (!ma.strategy_slow && ma.ma55) lines.push(['MA55', ma.ma55, '#87cefa', 1]);
     // Keep the reference SMA144 independent of custom strategy periods.
     const reference = ['MA144', ma.ma144 || legacyMA144(kline.values || []), '#eb2f96', 1.5];
-    return [...lines.filter(([name]) => name !== 'MA144'), reference].map(([name, values, color, width]) => ({
+    const names = new Set();
+    return [...lines.filter(([name]) => name !== 'MA144'), reference].filter(([name]) => {
+        if (names.has(name)) return false;
+        names.add(name);
+        return true;
+    }).map(([name, values, color, width]) => ({
         name,
         type: 'line',
         data: values,

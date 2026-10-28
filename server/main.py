@@ -547,6 +547,27 @@ def batch_analyze(request: BatchAnalyzeRequest):
     )
     return {"results": results}
 
+class StrategyDetailRequest(BaseModel):
+    symbol: str
+    period: str
+    strategy_name: str
+    strategy_params: Dict[str, Any]
+    market_type: Literal['futures', 'stock'] = 'futures'
+    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    data_source: Literal['main', 'weighted'] = 'main'
+    start_date: Optional[str] = None
+    as_of: Optional[str] = None
+    history_start: Optional[str] = None
+
+
+@app.post('/api/strategy/detail')
+def strategy_detail(request: StrategyDetailRequest):
+    result = BacktestEngine().analyze_detail(**request.model_dump())
+    if 'error' in result:
+        raise HTTPException(status_code=400, detail=result['error'])
+    return result
+
+
 class ScanRequest(BaseModel):
     symbols: List[str]
     period: str

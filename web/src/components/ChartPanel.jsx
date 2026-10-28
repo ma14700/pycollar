@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { getProfitDistributionOption } from '../utils/profitDistribution';
 import { buildMovingAverageSeries } from '../utils/chartMovingAverages';
 
-const ChartPanel = ({ chartType, results, onChartClick }) => {
+const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
     if (!results) return null;
 
     // 提取 key 的逻辑，避免 ReactECharts 内部状态混乱
@@ -51,6 +51,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
         const klineObj = data.kline_data || {};
         const dates = klineObj.dates || [];
         const klineData = klineObj.values || [];
+        const zoomStart = visibleBars ? Math.max(0, (1 - visibleBars / dates.length) * 100) : 50;
         
         // 数据完整性检查：如果没有K线数据或日期数据，不渲染复杂图表
         if (!dates.length || !klineData.length) {
@@ -304,7 +305,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
                 {
                     type: 'inside',
                     xAxisIndex: showEquity ? [0, 1] : [0],
-                    start: 50,
+                    start: zoomStart,
                     end: 100
                 },
                 {
@@ -312,7 +313,7 @@ const ChartPanel = ({ chartType, results, onChartClick }) => {
                     xAxisIndex: showEquity ? [0, 1] : [0],
                     type: 'slider',
                     top: '94%',
-                    start: 50,
+                    start: zoomStart,
                     end: 100
                 }
             ],

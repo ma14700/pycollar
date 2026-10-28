@@ -332,12 +332,12 @@ class DualMAFixedTPSLStrategy(BaseStrategy):
             sl_price = entry_price - sl_diff
             tp_price = entry_price + tp_diff
             self.sl_order = self.sell(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
-            self.tp_order = self.sell(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+            self.tp_order = self.sell(size=abs(size), price=tp_price, exectype=bt.Order.Limit, oco=self.sl_order)
         elif size < 0:
             sl_price = entry_price + sl_diff
             tp_price = entry_price - tp_diff
             self.sl_order = self.buy(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
-            self.tp_order = self.buy(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+            self.tp_order = self.buy(size=abs(size), price=tp_price, exectype=bt.Order.Limit, oco=self.sl_order)
 
     def cancel_sl_tp(self):
         if self.sl_order:
@@ -423,10 +423,10 @@ class DKXFixedTPSLStrategy(DKXStrategy):
         
         if size > 0:
             self.sl_order = self.sell(size=abs(size), price=entry_price - sl_val, exectype=bt.Order.Stop)
-            self.tp_order = self.sell(size=abs(size), price=entry_price + tp_val, exectype=bt.Order.Limit)
+            self.tp_order = self.sell(size=abs(size), price=entry_price + tp_val, exectype=bt.Order.Limit, oco=self.sl_order)
         elif size < 0:
             self.sl_order = self.buy(size=abs(size), price=entry_price + sl_val, exectype=bt.Order.Stop)
-            self.tp_order = self.buy(size=abs(size), price=entry_price - tp_val, exectype=bt.Order.Limit)
+            self.tp_order = self.buy(size=abs(size), price=entry_price - tp_val, exectype=bt.Order.Limit, oco=self.sl_order)
 
     def cancel_sl_tp(self):
         if self.sl_order:
@@ -514,7 +514,7 @@ class MA20MA55RiskRewardStrategy(BaseStrategy):
             self.log(f'设置多头止损: {sl_price:.2f} (ATR={atr_val:.2f}), 止盈: {tp_price:.2f} (盈亏比={self.params.risk_reward_ratio})')
             
             self.sl_order = self.sell(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
-            self.tp_order = self.sell(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+            self.tp_order = self.sell(size=abs(size), price=tp_price, exectype=bt.Order.Limit, oco=self.sl_order)
             
         elif size < 0: # 空头
             sl_price = entry_price + risk_dist
@@ -522,7 +522,7 @@ class MA20MA55RiskRewardStrategy(BaseStrategy):
             self.log(f'设置空头止损: {sl_price:.2f} (ATR={atr_val:.2f}), 止盈: {tp_price:.2f} (盈亏比={self.params.risk_reward_ratio})')
             
             self.sl_order = self.buy(size=abs(size), price=sl_price, exectype=bt.Order.Stop)
-            self.tp_order = self.buy(size=abs(size), price=tp_price, exectype=bt.Order.Limit)
+            self.tp_order = self.buy(size=abs(size), price=tp_price, exectype=bt.Order.Limit, oco=self.sl_order)
 
     def cancel_sl_tp(self):
         if self.sl_order:
@@ -578,7 +578,7 @@ class DKXPartialTakeProfitStrategy(DKXStrategy):
         super().next() # 执行信号逻辑
         
         # 如果是最后两根K线（已在pre_next处理平仓或跳过），则停止后续逻辑
-        if len(self.datas[0]) >= self.datas[0].buflen() - 1:
+        if not self.params.disable_auto_close and len(self.datas[0]) >= self.datas[0].buflen() - 1:
             return
 
         # 止盈逻辑
@@ -660,6 +660,7 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
     """
     params = (
         ('take_profit_points', 50.0),
+        ('fixed_size', 2), # 默认改为 2 手，确保平半仓(1手)可行
     )
     
     def __init__(self):
@@ -667,39 +668,55 @@ class MA20MA55PartialTakeProfitStrategy(MA20MA55CrossoverStrategy):
         self.tp_order = None
 
     def notify_order(self, order):
+        # 必须调用父类，以确保 self.order 被重置，日志被记录
+        super().notify_order(order)
+        
+        # 检查是否为止盈单
+        is_tp_order = (self.tp_order and order.ref == self.tp_order.ref)
 
-        # 检查止盈单状态
-        if self.tp_order and order.ref == self.tp_order.ref:
-            if order.status == order.Completed:
+        if order.status == order.Completed:
+            if is_tp_order:
                 self.log(f'Partial TP Completed: Price {order.executed.price:.2f}, Size {order.executed.size}')
                 self.tp_order = None
-            elif order.status in [order.Canceled, order.Rejected, order.Margin]:
-                self.tp_order = None
+                
+                # 递归止盈：如果还有持仓，继续挂下一个止盈单
+                # 基于当前成交价再推进固定点数
+                if self.position.size != 0:
+                    self.place_partial_tp(base_price=order.executed.price)
+                    
+            else:
+                # 主订单成交（开仓或反手），挂第一个止盈单
+                # 只有当当前有持仓且没有挂TP单时执行
+                if self.position.size != 0 and not self.tp_order:
+                    # 初始止盈基于持仓均价
+                    self.place_partial_tp(base_price=self.position.price)
+                    
+        elif order.status in [order.Canceled, order.Rejected, order.Margin]:
+             if is_tp_order:
+                 self.tp_order = None
 
-        # 检查主订单成交，挂止盈单
-        if order.status == order.Completed:
-            # 如果没有 TP 单，且持仓不为0
-            if not self.tp_order and self.position.size != 0:
-                self.place_partial_tp()
-    def place_partial_tp(self):
-        # 计算目标价格 (基于持仓均价)
-        avg_price = self.position.price
-
-        # 计算平仓数量 (半仓)
-        size = abs(self.position.size) / 2.0
-
-        # 避免手数太小 (可选: 如果小于 0.01 则不操作? 但为了通用性先保留)
-        if size == 0: return
+    def place_partial_tp(self, base_price=None):
+        # 如果未指定基准价格，默认使用持仓均价 (通常用于首次开仓)
+        if base_price is None:
+            base_price = self.position.price
+        
+        # 计算平仓数量 (半仓) - 必须取整
+        size = int(abs(self.position.size) / 2)
+        
+        # 如果手数不足以平半仓（例如只有1手），则不进行半仓止盈
+        if size == 0: 
+            self.log(f'Position size {self.position.size} too small for partial TP (need at least 2), skipping.')
+            return
 
         target_price = 0
         if self.position.size > 0:
-            target_price = avg_price + self.params.take_profit_points
+            target_price = base_price + self.params.take_profit_points
             self.tp_order = self.sell(size=size, price=target_price, exectype=bt.Order.Limit)
         else:
-            target_price = avg_price - self.params.take_profit_points
+            target_price = base_price - self.params.take_profit_points
             self.tp_order = self.buy(size=size, price=target_price, exectype=bt.Order.Limit)
-
-        self.log(f'Placed Partial TP Limit Order: Price {target_price:.2f}, Size {size}')
+            
+        self.log(f'Placed Partial TP Limit Order: Price {target_price:.2f}, Size {size} (Base: {base_price:.2f})')
 
     def next(self):
         # 如果有交叉信号，先取消现有的 TP 单，因为可能要反手
