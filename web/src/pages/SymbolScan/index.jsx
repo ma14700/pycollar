@@ -252,6 +252,9 @@ const SymbolScan = () => {
                             <Form.Item name="strategy_name" label="策略选择">
                                 <Select onChange={(val) => {
                                     setStrategyType(val);
+                                    if (['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(val)) {
+                                        form.setFieldsValue({ fast_period: 20, slow_period: 55, size_mode: 'fixed', fixed_size: 20 });
+                                    }
                                     if (val.includes('MA55')) {
                                         form.setFieldsValue({ ma_period: 55 });
                                     }
@@ -268,6 +271,8 @@ const SymbolScan = () => {
                                     <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                                     <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                                     <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                                    <Option value="MA20MA55LongOnlyStrategy">20/55双均线交叉多（只做多）</Option>
+                                    <Option value="MA20MA55ShortOnlyStrategy">20/55双均线交叉空（只做空）</Option>
                                     <Option value="MA20MA55RiskRewardStrategy">20/55双均线+盈亏比优化</Option>
                                     <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
                                     <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>

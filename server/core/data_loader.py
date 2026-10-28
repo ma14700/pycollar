@@ -1,6 +1,7 @@
 import akshare as ak
 import pandas as pd
 import datetime
+from .market_cache import MarketCache, is_contract
 
 def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_date=None, adjust='qfq'):
     """
@@ -105,20 +106,49 @@ def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_dat
         traceback.print_exc()
         return None
 
-def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_date=None, data_source='main', data_provider='akshare'):
+def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_date=None, data_source='main', data_provider='akshare',
+               cache_contract=False, required_start_date=None):
+    use_cache = cache_contract and is_contract(symbol, market_type, data_source)
     if data_provider == 'tqsdk':
         if market_type != 'futures':
             raise ValueError('天勤免费版在本平台仅支持期货，请切换原有来源获取股票数据')
         from .tq_provider import fetch_tq_data
+        if use_cache:
+            return fetch_tq_data(symbol, period, start_date, end_date, data_source,
+                                 cache_contract=True, required_start_date=required_start_date)
         return fetch_tq_data(symbol, period, start_date, end_date, data_source)
     if data_provider != 'akshare':
         raise ValueError('不支持的行情供应商')
     if market_type == 'stock':
         return fetch_stock_data(symbol, period, start_date, end_date)
+    elif use_cache:
+        from .tq_provider import completed_weekly_bars
+        source_period = 'daily' if period == 'weekly' else period
+        def load():
+            return fetch_futures_data(symbol, source_period, data_source=data_source, strict=True)
+        df = MarketCache().candles('akshare', symbol, source_period, load, end_date=end_date,
+                                   required_start_date=required_start_date or start_date, full_series=period == 'weekly')
+        info = df.attrs['data_info'].copy()
+        if period == 'weekly':
+            df = completed_weekly_bars(df)
+        available_start, available_end = df.index.min(), df.index.max()
+        if start_date:
+            df = df.loc[df.index >= pd.Timestamp(start_date)]
+        if end_date:
+            df = df.loc[df.index < pd.Timestamp(end_date) + pd.Timedelta(days=1)]
+        if df.empty:
+            raise ValueError('所选日期没有该合约的已完成行情')
+        info.update(provider='akshare', provider_name='AkShare', symbol=symbol, resolved_symbol=symbol,
+                    data_source=data_source, period=period, timezone='Asia/Shanghai', bars=len(df),
+                    start=str(df.index.min()), end=str(df.index.max()),
+                    available_start=str(available_start), available_end=str(available_end),
+                    note='具体合约已完成行情按需保存到本地，仅在覆盖不足时请求第三方。')
+        df.attrs['data_info'] = info
+        return df
     else:
         return fetch_futures_data(symbol, period, start_date, end_date, data_source)
 
-def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None, data_source='main'):
+def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None, data_source='main', strict=False):
     """
     获取期货数据
     :param symbol: 合约代码
@@ -308,6 +338,8 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
         
     except Exception as e:
         print(f"获取数据失败: {e}")
+        if strict:
+            raise ValueError('具体合约取数失败，未缓存数据；不会改用其他周期或合约') from e
         # 如果获取分钟数据失败，尝试获取日线数据作为备选
         try:
             print("尝试获取日线数据作为备选...")

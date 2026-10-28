@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, Literal
-from functools import lru_cache
 import uvicorn
 import sys
 import os
@@ -17,7 +16,9 @@ from core.engine import BacktestEngine
 from core.database import init_db, SessionLocal, BacktestRecord
 from core.optimizer import StrategyOptimizer
 from core.constants import get_multiplier, FUTURES_MULTIPLIERS, FUTURES_NAMES
-from core.tq_provider import provider_status, fetch_tq_quote
+from core.tq_provider import provider_status, fetch_tq_quote, fetch_tq_contracts, tq_symbol
+from core.market_cache import MarketCache, ResourceValue
+from core.contract_backtest import contract_scope
 from core.candle_compare import compare_market_candles
 from core.recent_news import get_recent_news
 from core.jin10_mcp import status as jin10_mcp_status
@@ -59,11 +60,24 @@ class BacktestRequest(BaseModel):
     strategy_name: str = "TrendFollowingStrategy"
     data_source: str = "main" # 数据来源: main (主力), weighted (加权/指数)
     data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    contract_month: Optional[str] = Field(default=None, pattern=r'^\d{2}(0[1-9]|1[0-2])$')
 
 
 @app.get('/api/data/providers')
 def get_data_providers():
     return {"tqsdk": provider_status()}
+
+
+@app.get('/api/futures/contracts')
+def get_futures_contracts(symbol: str):
+    try:
+        resolved = tq_symbol(symbol)
+        if not resolved.startswith('KQ.m@'):
+            raise ValueError('请选择期货品种后查询具体合约')
+        return MarketCache().resource(f'contracts:v1:{resolved}',
+            lambda: {'contracts': fetch_tq_contracts(symbol)}, ttl=3600)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
 
 
 @app.get('/api/news/recent')
@@ -106,7 +120,6 @@ def compare_candles(request: CandleCompareRequest):
     except Exception:
         raise HTTPException(status_code=502, detail='行情对比暂时失败，请检查数据源或稍后重试') from None
 
-@lru_cache(maxsize=1)
 def get_all_stock_info():
     try:
         # 获取A股股票列表 (代码, 名称)
@@ -117,8 +130,7 @@ def get_all_stock_info():
         print(f"Error fetching stock list from AkShare: {e}")
         return None
 
-@app.get("/api/symbols")
-def get_symbols(market_type: str = 'futures'):
+def _build_symbols(market_type):
     if market_type == 'futures':
         # FUTURES_NAMES is imported from core.constants
         
@@ -184,9 +196,18 @@ def get_symbols(market_type: str = 'futures'):
                 {"code": "sh600030", "name": "中信证券", "multiplier": 100}
              ])
              
-        return {"stocks": stocks_list}
+        result = {"stocks": stocks_list}
+        return result if df is not None and not df.empty else ResourceValue(result, ttl=60, fallback=True)
     else:
         return {"error": "Invalid market_type"}
+
+
+@app.get("/api/symbols")
+def get_symbols(market_type: str = 'futures'):
+    if market_type not in ('futures', 'stock'):
+        return {"error": "Invalid market_type"}
+    return MarketCache().resource(f'symbols:v1:{market_type}', lambda: _build_symbols(market_type),
+                                   ttl=86400 if market_type == 'futures' else 21600)
 
 @app.get("/api/quote/latest")
 def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str = 'main', data_provider: Literal['akshare', 'tqsdk'] = 'akshare'):
@@ -284,6 +305,13 @@ def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str
 
 @app.post("/api/backtest")
 def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
+    if request.contract_month:
+        try:
+            scope = contract_scope(request.symbol, request.contract_month, request.market_type,
+                                   request.data_provider, request.data_source)
+            request = request.model_copy(update=scope)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
     print(f"收到回测请求: {request.symbol}, {request.period}, {request.market_type}, {request.strategy_params}, 策略: {request.strategy_name}, 自动优化: {request.auto_optimize}, 时间段: {request.start_date} - {request.end_date}")
     engine = BacktestEngine()
     
@@ -298,7 +326,8 @@ def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
         end_date=request.end_date,
         strategy_name=request.strategy_name,
         data_source=request.data_source,
-        data_provider=request.data_provider
+        data_provider=request.data_provider,
+        contract_month=request.contract_month
     )
     
     if "error" in result:
@@ -347,7 +376,8 @@ def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
             data_source=request.data_source,
             data_provider=request.data_provider,
             market_type=request.market_type,
-            initial_cash=request.initial_cash
+            initial_cash=request.initial_cash,
+            contract_month=request.contract_month
         )
         if best_res:
              optimized_result = best_res

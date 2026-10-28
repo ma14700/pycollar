@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Form, Select } from 'antd';
 import axios from 'axios';
 
-const DataProviderSelect = ({ form, onChange }) => {
+const DataProviderSelect = ({ form, onChange, disabled = false }) => {
     const market = Form.useWatch('market_type', form) || 'futures';
     const provider = Form.useWatch('data_provider', form) || (market === 'stock' ? 'akshare' : 'tqsdk');
     const [status, setStatus] = useState(null);
@@ -16,7 +16,7 @@ const DataProviderSelect = ({ form, onChange }) => {
 
     return <>
         <Form.Item name="data_provider" label="行情供应商" initialValue="tqsdk">
-            <Select onChange={onChange} options={[
+            <Select disabled={disabled} onChange={onChange} options={[
                 { value: 'akshare', label: market === 'stock' ? '原有来源（东方财富 / 新浪）' : '新浪财经（原有来源）' },
                 { value: 'tqsdk', label: '天勤 TqSdk 免费版', disabled: market !== 'futures' },
             ]} />

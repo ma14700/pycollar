@@ -2,6 +2,8 @@ export const strategyNameMap = {
   'MA55BreakoutStrategy': 'MA55突破+背离离场',
   'MA55TouchExitStrategy': 'MA55突破+触碰平仓',
   'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',
+  'MA20MA55LongOnlyStrategy': '20/55双均线交叉多（只做多）',
+  'MA20MA55ShortOnlyStrategy': '20/55双均线交叉空（只做空）',
   'MA20MA144LongOnlyStrategy': '20/144金叉做多·20/55死叉离场',
   'MA20MA144ShortOnlyStrategy': '20/144死叉做空·20/55金叉离场',
   'MA20MA144LongShortStrategy': '20/144多空入场·20/55交叉离场',

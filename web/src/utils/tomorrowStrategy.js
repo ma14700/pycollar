@@ -2,6 +2,8 @@ export const tomorrowStrategyOptions = [
     { value: 'MA55BreakoutStrategy', label: 'MA55突破（多空反手）', defaults: { ma_period: 55 } },
     { value: 'MA55TouchExitStrategy', label: 'MA55突破+触碰平仓', defaults: { ma_period: 55 } },
     { value: 'MA20MA55CrossoverStrategy', label: '20/55双均线交叉(多空)', defaults: { fast_period: 20, slow_period: 55 } },
+    { value: 'MA20MA55LongOnlyStrategy', label: '20/55双均线交叉多（只做多）', defaults: { fast_period: 20, slow_period: 55 } },
+    { value: 'MA20MA55ShortOnlyStrategy', label: '20/55双均线交叉空（只做空）', defaults: { fast_period: 20, slow_period: 55 } },
     { value: 'MA20MA60CrossoverStrategy', label: '20/60双均线交叉(多空)', defaults: { fast_period: 20, slow_period: 60 } },
     { value: 'MA5MA20CrossoverStrategy', label: '5/20双均线交叉(多空)', defaults: { fast_period: 5, slow_period: 20 } },
     { value: 'MA5MA55CrossoverStrategy', label: '5/55均线交叉(多空)', defaults: { fast_period: 5, slow_period: 55, allow_reverse: true } },

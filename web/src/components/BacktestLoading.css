@@ -1,0 +1,63 @@
+.backtest-wait {
+    --wait-blue: #3679ee;
+    min-height: min(720px, calc(100vh - 128px));
+    padding: clamp(22px, 3vw, 38px);
+    border: 1px solid #e0e8f5;
+    border-radius: 18px;
+    background: linear-gradient(145deg, #fff 30%, #f5f9ff 100%);
+    box-shadow: 0 10px 40px #234c8d08;
+    color: #263953;
+    animation: backtest-wait-enter .3s ease-out;
+}
+.backtest-wait-header, .backtest-wait-chart-title, .backtest-wait-progress-caption { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.backtest-wait-status { display: inline-flex; gap: 9px; align-items: center; color: #3d74cf; font-size: 12px; font-weight: 600; letter-spacing: .4px; }
+.backtest-wait-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wait-blue); box-shadow: 0 0 0 4px #3679ee10; animation: backtest-wait-pulse 1.8s ease-in-out infinite; }
+.backtest-wait-clock { color: #8a97ac; font-size: 12px; white-space: nowrap; }
+.backtest-wait-clock .anticon { margin-right: 4px; }
+.backtest-wait-clock b { display: inline-block; min-width: 39px; margin-left: 3px; color: #63758f; font-weight: 500; font-variant-numeric: tabular-nums; }
+.backtest-wait-intro { display: flex; align-items: center; gap: 16px; margin: 36px 0 27px; }
+.backtest-wait-icon { display: grid; place-items: center; flex-shrink: 0; width: 52px; height: 52px; border-radius: 16px; border: 1px solid #d8e6ff; background: linear-gradient(145deg, #eff5ff, #e2edff); color: var(--wait-blue); font-size: 25px; box-shadow: 0 5px 14px #3679ee0a; }
+.backtest-wait-intro h2 { margin: 0; font-size: clamp(20px, 2vw, 27px); letter-spacing: -.6px; font-weight: 650; line-height: 1.5; }
+.backtest-wait-intro p { margin: 6px 0 0; font-size: 12px; line-height: 1.8; color: #8593a9; }
+.backtest-wait-dots { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.backtest-wait-dots i { width: 4px; height: 4px; border-radius: 50%; background: #7ba2e4; animation: backtest-wait-dot 1.4s ease-in-out infinite; }
+.backtest-wait-dots i:nth-child(2) { animation-delay: .18s; }
+.backtest-wait-dots i:nth-child(3) { animation-delay: .36s; }
+.backtest-wait-context { display: grid; grid-template-columns: 1fr 1.7fr 1fr; gap: 20px; padding: 17px 20px; border: 1px solid #e6edf7; border-radius: 11px; background: #ffffffb3; }
+.backtest-wait-context > div { min-width: 0; }
+.backtest-wait-context > div + div { border-left: 1px solid #e9eef6; padding-left: 20px; }
+.backtest-wait-context span { display: block; color: #8e9bb0; font-size: 11px; margin-bottom: 7px; }
+.backtest-wait-context strong { display: block; color: #455975; font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backtest-wait-context small { font-size: 11px; font-weight: 400; color: #96a3b7; margin-left: 8px; }
+.backtest-wait-chart { padding: 18px 20px 12px; margin-top: 24px; border: 1px solid #e5ecf7; border-radius: 12px; background: #ffffffa8; overflow: hidden; }
+.backtest-wait-chart-title { color: #8797ae; font-size: 11px; margin-bottom: 18px; }
+.backtest-wait-chart-title > span { display: inline-flex; align-items: center; gap: 7px; }
+.backtest-wait-chart-dot { width: 5px; height: 5px; background: #8aaff1; border-radius: 50%; }
+.backtest-wait-live { color: #87a2cb; }
+.backtest-wait-chart svg { display: block; width: 100%; height: clamp(145px, 20vh, 200px); overflow: hidden; }
+.backtest-wait-scan { animation: backtest-wait-scan 3.5s linear infinite; }
+.backtest-wait-chart-axis { display: flex; justify-content: space-between; margin-top: 10px; color: #a8b4c5; font-size: 10px; }
+.backtest-wait-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.backtest-wait-metrics > div { padding: 16px 18px; border: 1px solid #e7edf7; border-radius: 10px; background: #ffffff90; }
+.backtest-wait-metrics > div > span { color: #98a5b7; font-size: 11px; }
+.backtest-wait-skeleton { position: relative; overflow: hidden; width: 63%; height: 14px; border-radius: 4px; margin-top: 14px; background: #eaf0f9; }
+.backtest-wait-skeleton::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent, #ffffffb3, transparent); transform: translateX(-100%); animation: backtest-wait-shimmer 2.4s ease-in-out infinite; }
+.backtest-wait-skeleton-1 { width: 47%; }
+.backtest-wait-skeleton-2 { width: 54%; }
+.backtest-wait-skeleton-sub { width: 82%; height: 6px; margin-top: 10px; background: #f0f4fa; }
+.backtest-wait-footer { margin-top: 28px; }
+.backtest-wait-progress-caption { color: #778ba7; font-size: 11px; }
+.backtest-wait-progress-caption > span:last-child { font-variant-numeric: tabular-nums; color: #5d80b6; }
+.backtest-wait-progress { position: relative; height: 5px; overflow: hidden; margin-top: 11px; border-radius: 5px; background: #e7eef9; }
+.backtest-wait-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #a2c3ff, #3679ee); transition: width .35s ease; }
+.backtest-wait-progress-indeterminate > span { position: absolute; width: 34%; animation: backtest-wait-progress 1.9s ease-in-out infinite; }
+.backtest-wait-note { margin-top: 12px; color: #a1aec0; font-size: 11px; line-height: 1.7; }
+@keyframes backtest-wait-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes backtest-wait-pulse { 50% { box-shadow: 0 0 0 6px #3679ee06; opacity: .55; } }
+@keyframes backtest-wait-dot { 50% { opacity: .25; transform: translateY(-3px); } }
+@keyframes backtest-wait-scan { from { transform: translateX(0); } to { transform: translateX(820px); } }
+@keyframes backtest-wait-shimmer { to { transform: translateX(100%); } }
+@keyframes backtest-wait-progress { from { transform: translateX(-105%); } to { transform: translateX(400%); } }
+@media (max-width: 1100px) { .backtest-wait { padding: 22px; } .backtest-wait-intro { margin-top: 28px; } .backtest-wait-context { grid-template-columns: 1fr 1.5fr; gap: 14px; padding: 14px; } .backtest-wait-context > div + div { padding-left: 14px; } .backtest-wait-context > div:last-child { display: none; } }
+@media (max-width: 650px) { .backtest-wait { padding: 18px; } .backtest-wait-header { flex-wrap: wrap; } .backtest-wait-icon { display: none; } .backtest-wait-context { grid-template-columns: 1fr; } .backtest-wait-context > div + div { border-left: 0; padding-left: 0; } .backtest-wait-metrics { gap: 8px; } .backtest-wait-metrics > div { padding: 12px 9px; } .backtest-wait-chart { padding: 14px 12px 10px; } }
+@media (prefers-reduced-motion: reduce) { .backtest-wait, .backtest-wait *, .backtest-wait *::after { animation: none !important; transition: none !important; } .backtest-wait-scan { display: none; } .backtest-wait-progress-indeterminate > span { width: 100%; background: #8eb4f5; } }

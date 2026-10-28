@@ -53,7 +53,8 @@ const BatchBacktestResult = ({ results, symbols = [], isFullScreen, onToggleFull
           const metrics = data?.metrics;
 
           // 获取品种名称
-          const symbolObj = symbols.find(s => s.code === symbol);
+          const symbolObj = symbols.find(s => s.code === symbol)
+            || symbols.find(s => s.code === `${symbol?.match(/^[A-Za-z]+/)?.[0]}0`);
           // 如果找不到完全匹配，尝试匹配前缀 (e.g. SH0 -> SH) 或者从名称中提取
           // 这里假设 symbols 列表里有准确的 code
           const symbolName = symbolObj ? symbolObj.name : '';

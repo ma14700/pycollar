@@ -20,6 +20,7 @@ STRATEGIES = [
     'MA20MA55PartialTakeProfitStrategy', 'DualMAFixedTPSLStrategy', 'DKXStrategy',
     'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy', 'TrendFollowingStrategy',
     'MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy',
+    'MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy',
 ]
 
 

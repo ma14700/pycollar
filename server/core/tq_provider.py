@@ -10,6 +10,8 @@ import sys
 import pandas as pd
 import numpy as np
 from dotenv import dotenv_values
+from .contract_backtest import contract_choices
+from .market_cache import MarketCache, is_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SERIES_LENGTH = 10000
@@ -125,13 +127,26 @@ def completed_weekly_bars(daily, now=None):
     return weekly[weekly.index + pd.Timedelta(hours=15, minutes=15) <= now]
 
 
-def fetch_tq_data(symbol, period="daily", start_date=None, end_date=None, data_source="main"):
+def fetch_tq_data(symbol, period="daily", start_date=None, end_date=None, data_source="main",
+                  cache_contract=False, required_start_date=None):
     if period not in PERIODS and period != "weekly":
         raise ValueError("天勤支持周线、日线及 1/5/15/30/60 分钟线")
     resolved = tq_symbol(symbol, data_source)
     source_period = "daily" if period == "weekly" else period
-    result = run_worker({"action": "bars", "symbol": resolved, "period": source_period})
-    df = normalize_serial(result["bars"], source_period)
+    def load():
+        result = run_worker({"action": "bars", "symbol": resolved, "period": source_period})
+        frame = normalize_serial(result["bars"], source_period)
+        frame.attrs['data_info'] = {'history_complete': result.get('history_complete', False)}
+        return frame
+
+    cached = cache_contract and is_contract(symbol, data_source=data_source)
+    if cached:
+        # Keep the full warmup prefix and complete daily weeks before final filtering.
+        df = MarketCache().candles('tqsdk', symbol, source_period, load, end_date=end_date,
+                                   required_start_date=required_start_date or start_date, full_series=period == 'weekly')
+    else:
+        df = load()
+    cache_info = df.attrs.get('data_info', {}).copy()
     if period == "weekly":
         # Aggregate before date filtering so a midweek start cannot truncate OHLC.
         df = completed_weekly_bars(df)
@@ -150,14 +165,30 @@ def fetch_tq_data(symbol, period="daily", start_date=None, end_date=None, data_s
         "period": period, "timezone": "Asia/Shanghai", "bars": len(df),
         "start": str(df.index.min()), "end": str(df.index.max()),
         "available_start": str(available_start), "available_end": str(available_end),
+        "history_complete": cache_info.get('history_complete', False),
         "note": ("周线由最多 10000 根天勤日线按周五合成，排除未结束的交易周。"
                  if period == "weekly" else "近期滚动窗口，最多 10000 根；仅使用已完成 K 线，日期筛选按北京时间。"),
     }
+    if cached:
+        df.attrs['data_info'].update({key: value for key, value in cache_info.items() if key.startswith('cache_')})
+        df.attrs['data_info']['note'] = ('具体合约已完成行情按需保存到本地，仅在覆盖不足时请求天勤；'
+                                       + ('周线由本地日线按周五合成，排除未结束的交易周。' if period == 'weekly'
+                                          else '日期筛选按北京时间。'))
     return df
+
+
+def fetch_tq_contracts(symbol):
+    resolved = tq_symbol(symbol, 'main')
+    if not resolved.startswith('KQ.m@'):
+        raise ValueError('请选择期货品种后查询具体合约')
+    exchange, product = resolved.split('@', 1)[1].split('.', 1)
+    result = run_worker({'action': 'contracts', 'exchange': exchange, 'product': product})
+    return contract_choices(symbol, result['contracts'])
 
 
 def fetch_tq_quote(symbol, data_source="main"):
     resolved = tq_symbol(symbol, data_source)
-    result = run_worker({"action": "quote", "symbol": resolved})
+    action = 'quote' if resolved.startswith('KQ.') else 'contract_quote'
+    result = run_worker({"action": action, "symbol": resolved})
     return {"symbol": symbol, "price": result["price"], "date": result["date"],
             "data_provider": "tqsdk", "resolved_symbol": resolved}

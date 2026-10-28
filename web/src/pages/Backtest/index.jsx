@@ -17,6 +17,8 @@ import { useBacktest } from '../../context/BacktestContext';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
 import { buildBacktestSaveRequests } from '../../utils/backtestSave';
+import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets } from '../../utils/contractBacktest';
+import BacktestLoading from '../../components/BacktestLoading';
 
 import SingleBacktestResult from './SingleBacktestResult';
 import BatchBacktestResult from './BatchBacktestResult';
@@ -26,6 +28,7 @@ const { Option } = Select;
 const BacktestPage = () => {
   const { results, setResults, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType } = useBacktest();
   const [loading, setLoading] = useState(false);
+  const [activeRun, setActiveRun] = useState(null);
   const [form] = Form.useForm();
   const [defaultDateRange] = useState(() => [
     dayjs('2025-01-01'),
@@ -35,6 +38,7 @@ const BacktestPage = () => {
   const isMA144SignalStrategy = ['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(strategyType);
   const isShortMA144Strategy = strategyType === 'MA20MA144ShortOnlyStrategy';
   const isLongShortMA144Strategy = strategyType === 'MA20MA144LongShortStrategy';
+  const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(strategyType);
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
   const [autoOptimize, setAutoOptimize] = useState(false);
@@ -45,6 +49,44 @@ const BacktestPage = () => {
   // For now, we fetch on mount if symbols is empty or just fetch every time to be safe
   const [futuresList, setFuturesList] = useState([]);
   const [stockList, setStockList] = useState([]);
+  const selectedProducts = Form.useWatch('symbol', form);
+  const selectedMarket = Form.useWatch('market_type', form) || 'futures';
+  const contractMonths = normalizeContractMonths(Form.useWatch('contract_month', form));
+  const contractMode = selectedMarket === 'futures' && contractMonths.length > 0;
+  const singleProduct = Array.isArray(selectedProducts) && selectedProducts.length === 1 ? selectedProducts[0] : null;
+  const [contractOptions, setContractOptions] = useState([]);
+  const [contractsLoading, setContractsLoading] = useState(false);
+  const [contractsError, setContractsError] = useState('');
+  const [contractReload, setContractReload] = useState(0);
+  const contractCache = useRef(new Map());
+  const previousDateRange = useRef(defaultDateRange);
+
+  useEffect(() => {
+    let active = true;
+    setContractOptions([]);
+    setContractsError('');
+    if (selectedMarket !== 'futures' || !singleProduct) {
+        setContractsLoading(false);
+        return;
+    }
+    const cached = contractCache.current.get(singleProduct);
+    if (cached) {
+        setContractOptions(cached);
+        setContractsLoading(false);
+        return;
+    }
+    setContractsLoading(true);
+    axios.get('http://localhost:8000/api/futures/contracts', { params: { symbol: singleProduct } })
+      .then(({ data }) => {
+        if (!active) return;
+        const options = data.contracts || [];
+        contractCache.current.set(singleProduct, options);
+        setContractOptions(options);
+      })
+      .catch(error => { if (active) setContractsError(error.response?.data?.detail || '加载合约失败，请重试'); })
+      .finally(() => { if (active) setContractsLoading(false); });
+    return () => { active = false; };
+  }, [singleProduct, selectedMarket, contractReload]);
 
   // Fetch symbols on mount
   useEffect(() => {
@@ -74,6 +116,13 @@ const BacktestPage = () => {
                 data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') };
             if (initialValues.symbol && !Array.isArray(initialValues.symbol)) {
                 initialValues.symbol = [initialValues.symbol];
+            }
+            initialValues.contract_month = marketType === 'futures' ? normalizeContractMonths(initialValues.contract_month) : [];
+            if (initialValues.contract_month.length) {
+                const window = contractWindow(initialValues.contract_month[0]);
+                initialValues.date_range = initialValues.contract_month.length === 1 ? [dayjs(window.start_date), dayjs(window.end_date)] : null;
+                initialValues.data_provider = 'tqsdk';
+                initialValues.data_source = 'main';
             }
 
             form.setFieldsValue(initialValues);
@@ -133,11 +182,19 @@ const BacktestPage = () => {
   const fetchQuote = (symbol, overrides = {}) => {
     const requestId = ++quoteRequestId.current;
     setQuoteInfo(null);
-    const targetSymbol = Array.isArray(symbol) ? (symbol.length === 1 ? symbol[0] : null) : symbol;
+    let targetSymbol = Array.isArray(symbol) ? (symbol.length === 1 ? symbol[0] : null) : symbol;
     if (!targetSymbol) return;
     const marketType = form.getFieldValue('market_type') || 'futures';
-    const dataSource = overrides.data_source || form.getFieldValue('data_source') || 'main';
-    const dataProvider = overrides.data_provider || form.getFieldValue('data_provider') || (marketType === 'stock' ? 'akshare' : 'tqsdk');
+    let dataSource = overrides.data_source || form.getFieldValue('data_source') || 'main';
+    let dataProvider = overrides.data_provider || form.getFieldValue('data_provider') || (marketType === 'stock' ? 'akshare' : 'tqsdk');
+    const months = normalizeContractMonths(Object.hasOwn(overrides, 'contract_month') ? overrides.contract_month : form.getFieldValue('contract_month'));
+    if (months.length > 1) return;
+    if (months.length === 1 && marketType === 'futures') {
+        const specific = applyContractBacktest({ symbol: targetSymbol, market_type: marketType }, months[0]);
+        targetSymbol = specific.symbol;
+        dataSource = specific.data_source;
+        dataProvider = specific.data_provider;
+    }
     axios.get('http://localhost:8000/api/quote/latest', { params: { symbol: targetSymbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
       .then(res => {
         if (requestId === quoteRequestId.current) setQuoteInfo(res.data);
@@ -148,7 +205,28 @@ const BacktestPage = () => {
       });
   };
 
+  const clearContract = () => {
+    if (normalizeContractMonths(form.getFieldValue('contract_month')).length) {
+        form.setFieldsValue({ contract_month: [], date_range: previousDateRange.current });
+    }
+  };
+
+  const onContractChange = (selection) => {
+    const months = normalizeContractMonths(selection);
+    if (months.length) {
+        if (!contractMonths.length) previousDateRange.current = form.getFieldValue('date_range');
+        const window = contractWindow(months[0]);
+        form.setFieldsValue({ contract_month: months, data_provider: 'tqsdk', data_source: 'main',
+            date_range: months.length === 1 ? [dayjs(window.start_date), dayjs(window.end_date)] : null });
+    } else {
+        form.setFieldsValue({ contract_month: [], date_range: previousDateRange.current });
+    }
+    setSavedFormValues(form.getFieldsValue());
+    fetchQuote(form.getFieldValue('symbol'), { contract_month: months });
+  };
+
   const onSymbolChange = (value) => {
+    clearContract();
     // value 是数组
     if (Array.isArray(value) && value.length > 0) {
         // 取最后一个选中的作为参考来设置乘数
@@ -166,9 +244,11 @@ const BacktestPage = () => {
     } else {
         fetchQuote(null);
     }
+    setSavedFormValues(form.getFieldsValue());
   };
 
   const onFinish = async (values) => {
+    if (loading) return;
     let selectedSymbols = values.symbol;
     // 类型安全检查：确保是数组
     if (selectedSymbols && !Array.isArray(selectedSymbols)) {
@@ -179,7 +259,17 @@ const BacktestPage = () => {
         message.error('请至少选择一个品种');
         return;
     }
+    let targets;
+    try {
+        targets = buildBacktestTargets(selectedSymbols, values.contract_month);
+    } catch (error) {
+        message.error(error.message);
+        return;
+    }
 
+    setActiveRun({ total: targets.length, completed: 0, failed: 0, startedAt: Date.now(),
+        strategy: strategyType, period: values.period, provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
+        symbol: targets[0].symbol, unit: normalizeContractMonths(values.contract_month).length ? '合约' : '品种' });
     setLoading(true);
     setResults(null); // Clear previous results
 
@@ -187,7 +277,6 @@ const BacktestPage = () => {
     // 为了更好的用户体验，如果只选了一个，直接展示结果，不显示折叠面板
     // 如果选了多个，则使用新逻辑
 
-    const isBatch = selectedSymbols.length > 1;
     const batchResults = [];
     let completedCount = 0;
 
@@ -252,10 +341,10 @@ const BacktestPage = () => {
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
+      } else if (strategyType === 'MA20MA55CrossoverStrategy' || isDirectionalMA55Strategy || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
         params = {
-            fast_period: 20,
-            slow_period: strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
+            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
@@ -373,13 +462,15 @@ const BacktestPage = () => {
         };
       }
 
+      if (isDirectionalMA55Strategy) params.size_mode = 'fixed';
       params.entry_delay_bars = Number(values.entry_delay_bars);
       params.exit_delay_bars = Number(values.exit_delay_bars);
       setCurrentParams(params);
 
       // 批量执行逻辑
       // 为每个品种构建 payload
-      for (const symbolCode of selectedSymbols) {
+      for (const target of targets) {
+          const symbolCode = target.base_symbol;
           // 获取品种特定的 multiplier
           const symbolObj = symbols.find(s => s.code === symbolCode);
           const specificMultiplier = symbolObj ? symbolObj.multiplier : contractMultiplier;
@@ -387,7 +478,7 @@ const BacktestPage = () => {
           // 复制并覆盖 multiplier
           const specificParams = { ...params, contract_multiplier: specificMultiplier };
 
-          const payload = {
+          let payload = {
             symbol: symbolCode,
             period: values.period,
             market_type: values.market_type || 'futures',
@@ -403,26 +494,31 @@ const BacktestPage = () => {
             payload.start_date = values.date_range[0].format('YYYY-MM-DD');
             payload.end_date = values.date_range[1].format('YYYY-MM-DD');
           }
+          payload = applyContractBacktest(payload, target.contract_month);
+          setActiveRun(previous => ({ ...previous, symbol: payload.symbol,
+              symbolName: symbolObj?.name?.match(/\(([^)]+)\)/)?.[1] || symbolObj?.name,
+              provider: payload.data_provider }));
 
           try {
               // 串行执行以避免并发问题 (如果后端支持，可以改为 Promise.all)
               const response = await axios.post('http://localhost:8000/api/backtest', payload);
               batchResults.push({
-                  symbol: symbolCode,
+                  symbol: payload.symbol,
                   success: true,
                   data: { ...response.data, backtest_request: payload }
               });
           } catch (err) {
-              console.error(`Backtest failed for ${symbolCode}:`, err);
+              console.error(`Backtest failed for ${payload.symbol}:`, err);
               batchResults.push({
-                  symbol: symbolCode,
+                  symbol: payload.symbol,
                   success: false,
                   error: err.response?.data?.detail || err.message
               });
           }
 
           completedCount++;
-          // 可以添加 setProgress(completedCount / total)
+          setActiveRun(previous => ({ ...previous, completed: completedCount,
+              failed: batchResults.filter(item => !item.success).length }));
       }
       
       // 处理结果
@@ -507,6 +603,7 @@ const BacktestPage = () => {
                 }}>
                 <Form.Item name="market_type" label="市场类型">
                     <Select onChange={(val) => {
+                        clearContract();
                         form.setFieldsValue({ symbol: undefined });
                         if (val === 'stock') {
                             form.setFieldsValue({ data_source: 'main', data_provider: 'akshare' });
@@ -514,13 +611,14 @@ const BacktestPage = () => {
                             form.setFieldsValue({ data_provider: 'tqsdk' });
                         }
                         switchSymbols(val);
+                        setSavedFormValues(form.getFieldsValue());
                     }}>
                     <Option value="futures">期货</Option>
                     <Option value="stock">股票</Option>
                     </Select>
                 </Form.Item>
 
-                <DataProviderSelect form={form} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_provider: value })} />
+                <DataProviderSelect form={form} disabled={contractMode} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_provider: value })} />
 
                 <Form.Item 
                     name="data_source" 
@@ -529,8 +627,8 @@ const BacktestPage = () => {
                     tooltip="选择'主力连续'将使用主力合约拼接数据；选择'加权指数'将使用加权指数数据(如可用)"
                     shouldUpdate={(prev, curr) => prev.market_type !== curr.market_type}
                 >
-                    <Select disabled={form.getFieldValue('market_type') === 'stock'} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_source: value })}>
-                    <Option value="main">主力连续</Option>
+                    <Select disabled={selectedMarket === 'stock' || contractMode} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_source: value })}>
+                    <Option value="main">{contractMode ? '具体合约' : '主力连续'}</Option>
                     <Option value="weighted">加权指数</Option>
                     </Select>
                 </Form.Item>
@@ -566,6 +664,22 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
+                {selectedMarket === 'futures' && <Form.Item name="contract_month" label="具体合约（可多选）"
+                    extra={!singleProduct ? '先选择一个交易品种，再选择具体合约。' : contractsError ? <span style={{ color: '#ff4d4f' }}>{contractsError} <Button type="link" size="small" onClick={() => { contractCache.current.delete(singleProduct); setContractReload(value => value + 1); }}>重试</Button></span> : '具体合约使用天勤行情；清空后恢复原有品种回测。'}>
+                    <Select mode="multiple" maxTagCount="responsive" allowClear showSearch optionFilterProp="label" placeholder="可选择多个合约，如 2605、2701"
+                        disabled={!singleProduct || loading} loading={contractsLoading} options={contractOptions}
+                        notFoundContent={contractsLoading ? '加载合约中…' : contractsError ? '合约加载失败' : '暂无可用合约'}
+                        onChange={onContractChange} />
+                </Form.Item>}
+                {contractMode && <Alert type="info" showIcon style={{ marginBottom: 16 }}
+                    message={`已选择 ${contractMonths.length} 个具体合约，将分别生成回测结果`}
+                    description={<><div>各合约时间范围独立锁定，仅回测已有行情。</div>
+                        <div style={{ maxHeight: 160, overflowY: 'auto', marginTop: 8 }}>
+                            {contractMonths.map(month => { const window = contractWindow(month); return <div key={month} style={{ marginTop: 4 }}>
+                                <strong>{singleProduct?.replace(/0$/, '')}{month}</strong>：{window.start_date} ～ {window.end_date}
+                            </div>; })}
+                        </div></>} />}
+
                 <ContractInfo 
                     form={form} 
                     quoteInfo={quoteInfo} 
@@ -576,7 +690,9 @@ const BacktestPage = () => {
                         setStrategyType(val);
                         setSavedStrategyType(val);
                         // 切换策略时重置默认值
-                        if (['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(val)) {
+                        if (['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(val)) {
+                            form.setFieldsValue({ fast_period: 20, slow_period: 55, size_mode: 'fixed', fixed_size: 20 });
+                        } else if (['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(val)) {
                             setAutoOptimize(false);
                             form.setFieldsValue({ fast_period: 20, slow_period: 144, exit_period: 55, size_mode: 'fixed', fixed_size: 20 });
                         } else if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
@@ -668,6 +784,8 @@ const BacktestPage = () => {
                         <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                         <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                         <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                        <Option value="MA20MA55LongOnlyStrategy">20/55双均线交叉多（只做多）</Option>
+                        <Option value="MA20MA55ShortOnlyStrategy">20/55双均线交叉空（只做空）</Option>
                         <Option value="MA20MA60CrossoverStrategy">20/60双均线交叉(多空)</Option>
                         <Option value="MA20MA144LongOnlyStrategy">20/144金叉做多·20/55死叉离场</Option>
                         <Option value="MA20MA144ShortOnlyStrategy">20/144死叉做空·20/55金叉离场</Option>
@@ -685,6 +803,9 @@ const BacktestPage = () => {
                     </Select>
                 </Form.Item>
 
+                {isDirectionalMA55Strategy && <Alert type="info" showIcon style={{ marginBottom: 16 }}
+                    message={strategyType === 'MA20MA55LongOnlyStrategy' ? '金叉开多，死叉平多；不做空' : '死叉开空，金叉平空；不做多'}
+                    description="使用固定手数，不加仓、不反手；离场后等待同方向的新交叉信号。默认 MA20 / MA55，按开仓和平仓 K 线设置执行。" />}
                 {isMA144SignalStrategy && (
                     <Alert
                         type="info" showIcon style={{ marginBottom: 16 }}
@@ -705,7 +826,7 @@ const BacktestPage = () => {
                 </Form.Item>
 
                 <Form.Item label="时间范围" name="date_range">
-                    <DatePicker.RangePicker style={{ width: '100%' }} />
+                    <DatePicker.RangePicker disabled={contractMode} placeholder={contractMonths.length > 1 ? ['各合约独立开始日期', '各合约独立结束日期'] : undefined} style={{ width: '100%' }} />
                 </Form.Item>
 
                 <Row gutter={12}>
@@ -724,7 +845,7 @@ const BacktestPage = () => {
                     1 = 下一根开盘，2 = 第二根开盘，按实际 K 线计数。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
                 </div>
 
-                {isMA144SignalStrategy ? null : strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
+                {isMA144SignalStrategy ? null : isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -910,7 +1031,7 @@ const BacktestPage = () => {
                 >
                     {({ getFieldValue }) => {
                         const sizeMode = getFieldValue('size_mode');
-                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy) {
+                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy && !isDirectionalMA55Strategy) {
                             return (
                                 <Form.Item name="atr_multiplier" label="ATR止损倍数">
                                     <Input type="number" step="0.1" />
@@ -921,7 +1042,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {isMA144SignalStrategy ? (
+                {isMA144SignalStrategy || isDirectionalMA55Strategy ? (
                     <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={20} rules={[
                         { required: true, message: '请输入固定手数' },
                         { validator: (_, value) => Number.isInteger(Number(value)) && Number(value) > 0
@@ -1027,7 +1148,7 @@ const BacktestPage = () => {
                 </Form.Item>
                 <Form.Item>
                         <Tooltip title="重新运行回测以刷新图表">
-                        <Button icon={<ReloadOutlined />} onClick={form.submit} block size="large">
+                        <Button icon={<ReloadOutlined />} onClick={form.submit} disabled={loading} block size="large">
                             刷新图表
                         </Button>
                         </Tooltip>
@@ -1037,7 +1158,7 @@ const BacktestPage = () => {
             </Col>
             
             <Col span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
-            {results ? (
+            {loading && activeRun ? <BacktestLoading run={activeRun} /> : results ? (
                 results.isBatch ? (
                     <BatchBacktestResult
                         results={results}

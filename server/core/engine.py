@@ -6,6 +6,7 @@ import importlib
 from .data_loader import fetch_data
 from . import strategy
 from .constants import get_multiplier
+from .contract_backtest import contract_scope
 from .execution_delay import SignalDelayBroker, execution_delay_params
 from .accounting import (configure_accounting, closed_trade_stats, equity_statistics,
                          AccountEquity, COMMISSION_RATE, METRICS_VERSION)
@@ -45,9 +46,13 @@ class BacktestEngine:
         
         return valid_params
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None):
         strategy_params = strategy_params.copy()
+        contract_info = None
         try:
+            if contract_month:
+                contract_info = contract_scope(symbol, contract_month, market_type, data_provider, data_source)
+                symbol, start_date, end_date = (contract_info[key] for key in ('symbol', 'start_date', 'end_date'))
             initial_cash = float(initial_cash)
             if not np.isfinite(initial_cash) or initial_cash <= 0:
                 raise ValueError('初始资金必须为大于 0 的有限数字')
@@ -442,9 +447,12 @@ class BacktestEngine:
             strategy_params['start_date'] = start_date
             strategy_params['end_date'] = end_date # 注入结束日期，用于强制平仓
 
-            df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source, data_provider=data_provider)
+            df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source, data_provider=data_provider,
+                                cache_contract=True, required_start_date=start_date)
             if df_raw is not None:
                 df_raw = df_raw.copy()
+                if contract_info:
+                    df_raw = df_raw.loc[df_raw.index < pd.Timestamp(end_date) + pd.Timedelta(days=1)].copy()
                 if as_of:
                     df_raw = df_raw.loc[df_raw.index <= pd.to_datetime(as_of)].copy()
                 if history_start and not df_raw.empty:
@@ -458,9 +466,11 @@ class BacktestEngine:
                 req_start = pd.to_datetime(start_date)
                 data_start = df_raw.index.min()
                 if data_start > req_start + pd.Timedelta(days=5): # 放宽到5天
-                    if data_provider == 'tqsdk':
+                    if data_provider == 'tqsdk' and not (contract_info and df_raw.attrs.get('data_info', {}).get('history_complete')):
                         raise ValueError(f'天勤免费滚动窗口无法覆盖所选开始日期 {start_date}，当前最早数据为 {data_start}。请缩短范围或清空日期使用近期窗口。')
-                    data_warning = f"【数据警告】数据源限制: 只能获取到 {data_start.strftime('%Y-%m-%d')} 之后的数据 (请求开始: {start_date})。免费接口通常仅提供最近约1000根K线(分钟级)。"
+                    data_warning = (f"【合约行情】{symbol} 的完整可用历史始于 {data_start.strftime('%Y-%m-%d')}，所选月份范围按实际行情回测。"
+                                    if contract_info and df_raw.attrs.get('data_info', {}).get('history_complete') else
+                                    f"【数据警告】数据源限制: 只能获取到 {data_start.strftime('%Y-%m-%d')} 之后的数据 (请求开始: {start_date})。免费接口通常仅提供最近约1000根K线(分钟级)。")
                     print(data_warning)
                     
         except ValueError as ve:
@@ -471,6 +481,10 @@ class BacktestEngine:
             
         if df_raw is None or df_raw.empty:
             return {"error": "未找到该品种的数据，请检查代码或日期范围"}
+
+        if contract_info and not ((df_raw.index >= pd.Timestamp(start_date)) &
+                                  (df_raw.index < pd.Timestamp(end_date) + pd.Timedelta(days=1))).any():
+            return {"error": f"{symbol} 在 {start_date} 至 {end_date} 内尚无可用行情，无法回测该合约"}
 
         history_requirement = getattr(StrategyClass, 'required_bars', None)
         if callable(history_requirement):
@@ -799,6 +813,7 @@ class BacktestEngine:
         equity_stats = equity_statistics(final_equity_curve, initial_cash, period)
         raw_result = {
             "status": "success",
+            "contract_info": contract_info,
             "strategy_info": {"name": strategy_name, "params": filtered_params},
             "execution_info": {"history_start": str(df_raw.index.min())},
             "pending_orders": [{"date": df_raw.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
@@ -816,6 +831,7 @@ class BacktestEngine:
             "data_info": {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
                           "provider_name": '天勤 TqSdk 免费版' if data_provider == 'tqsdk' else '原有行情',
                           "symbol": symbol, "data_source": data_source, "period": period,
+                          "contract_month": contract_month,
                           "bars": len(df_kline), "start": str(df_kline.index.min()), "end": str(df_kline.index.max())},
             "equity_curve": final_equity_curve,
             "kline_data": kline_data,

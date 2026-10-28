@@ -258,6 +258,41 @@ class MA20MA55CrossoverStrategy(BaseStrategy):
             self.log('卖出信号 (死叉)')
             self.order = self.order_target_size(target=-self.params.fixed_size)
 
+class MA20MA55LongOnlyStrategy(MA20MA55CrossoverStrategy):
+    """Only open a long on a golden cross; a death cross closes it."""
+
+    @classmethod
+    def required_bars(cls, params):
+        return max(int(params.get(key, getattr(cls.params, key)))
+                   for key in ('fast_period', 'slow_period')) + 1
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.position.size > 0:
+            if self.crossover < 0:
+                self.log('平多信号（死叉）')
+                self.order = self.close()
+        elif self.position.size == 0 and self.crossover > 0:
+            self.log('开多信号（金叉）')
+            self.order = self.buy(size=self.params.fixed_size)
+
+
+class MA20MA55ShortOnlyStrategy(MA20MA55LongOnlyStrategy):
+    """Only open a short on a death cross; a golden cross closes it."""
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        if self.position.size < 0:
+            if self.crossover > 0:
+                self.log('平空信号（金叉）')
+                self.order = self.close()
+        elif self.position.size == 0 and self.crossover < 0:
+            self.log('开空信号（死叉）')
+            self.order = self.sell(size=self.params.fixed_size)
+
+
 class StockMA20MA55LongOnlyStrategy(BaseStrategy):
     """
     20/55双均线多头策略 (仅做多)

@@ -16,6 +16,9 @@ const SingleBacktestResult = ({ results }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <DataSourceInfo info={results.data_info} />
+      {results.contract_info && <Alert type="info" showIcon
+        message={`具体合约回测：${results.contract_info.symbol}`}
+        description={`自动时间范围：${results.contract_info.start_date} 至 ${results.contract_info.end_date}；实际结果仅包含该合约已产生的行情。`} />}
       {results.optimization_info?.triggered && (
         <Alert
           message="策略已自动优化"
