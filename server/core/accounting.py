@@ -73,7 +73,7 @@ def configure_accounting(broker, params, market_type):
     return info
 
 
-def closed_trade_stats(trade, multiplier):
+def closed_trade_stats(trade, multiplier, margin_rate=1.0):
     # Count units actually opened, including adds after partial closes, rather
     # than the final size (zero) or peak position. Reversals are split into
     # separate Backtrader trades and their own history events.
@@ -88,7 +88,9 @@ def closed_trade_stats(trade, multiplier):
         'net_profit': pnl,
         'net_per_hand': pnl / opened_units if opened_units else 0.0,
         'net_points': pnl / (opened_units * multiplier) if opened_units else 0.0,
-        'return_pct': pnl / entry_notional * 100 if entry_notional else 0.0,
+        # Dividing both profit and collateral by opened_units gives the same
+        # per-hand return. Added entries use their own actual execution prices.
+        'return_pct': pnl / (entry_notional * margin_rate) * 100 if entry_notional else 0.0,
     }
 
 

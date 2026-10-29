@@ -19,6 +19,7 @@ import DataSourceInfo from '../../components/DataSourceInfo';
 import { buildBacktestSaveRequests } from '../../utils/backtestSave';
 import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets } from '../../utils/contractBacktest';
 import BacktestLoading from '../../components/BacktestLoading';
+import { strategyOptions, strategyParameterKeys, pickStrategyParameters, defaultStrategyParameters, buildStrategyParameters, isFixedMA144Strategy } from '../../utils/backtestStrategies';
 import { getMA144ExitStrategy, ma144ExitStrategyOptions } from '../../utils/ma144ExitStrategies';
 
 import SingleBacktestResult from './SingleBacktestResult';
@@ -27,7 +28,7 @@ import BatchBacktestResult from './BatchBacktestResult';
 const { Option } = Select;
 
 const BacktestPage = () => {
-  const { results, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType,
+  const { results, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType, selectedStrategies, setSelectedStrategies, strategyConfigs, setStrategyConfigs,
     loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams } = useBacktest();
   const [form] = Form.useForm();
   const [defaultDateRange] = useState(() => [
@@ -244,6 +245,16 @@ const BacktestPage = () => {
     setSavedFormValues(form.getFieldsValue());
   };
 
+  const activateStrategy = name => {
+    const currentValues = form.getFieldsValue(true);
+    const configs = { ...strategyConfigs, [strategyType]: pickStrategyParameters(currentValues) };
+    setStrategyConfigs(configs);
+    setStrategyType(name); setSavedStrategyType(name);
+    form.setFieldsValue({ ...Object.fromEntries(strategyParameterKeys.map(key => [key, undefined])),
+      ...defaultStrategyParameters(name), ...configs[name] });
+    setSavedFormValues(form.getFieldsValue(true));
+  };
+
   const onFinish = async (values) => {
     if (loading) return;
     let selectedSymbols = values.symbol;
@@ -265,225 +276,34 @@ const BacktestPage = () => {
     }
 
     try {
-      let params = {};
-      const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
-      const equityPercent = values.equity_percent !== undefined ? parseFloat(values.equity_percent) : 0.1;
-      const contractMultiplier = values.contract_multiplier ? parseInt(values.contract_multiplier) : 1;
-      const marginRate = values.margin_rate !== undefined ? parseFloat(values.margin_rate) : 0.1;
-
-      // Strategy params construction logic
-      if (strategyType === 'TrendFollowingStrategy') {
-        params = {
-          fast_period: parseInt(values.fast_period),
-          slow_period: parseInt(values.slow_period),
-          atr_period: 14,
-          atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 2.0,
-          risk_per_trade: riskPerTrade,
-          equity_percent: equityPercent,
-          margin_rate: marginRate,
-          contract_multiplier: contractMultiplier,
-          use_expma: false,
-          size_mode: values.size_mode || 'fixed',
-          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20
-        };
-      } else if (isMA144SignalStrategy) {
-        params = {
-          fast_period: 20,
-          slow_period: 144,
-          exit_period: ma144ExitPeriod,
-          size_mode: 'fixed',
-          fixed_size: Number(values.fixed_size || 20),
-          margin_rate: marginRate,
-          contract_multiplier: contractMultiplier,
-        };
-      } else if (strategyType === 'MA55BreakoutStrategy') {
-        params = {
-          ma_period: 55,
-          macd_fast: 12,
-          macd_slow: 26,
-          macd_signal: values.macd_signal ? parseInt(values.macd_signal) : 9,
-          atr_period: 14,
-          atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-          risk_per_trade: riskPerTrade,
-          equity_percent: equityPercent,
-          margin_rate: marginRate,
-          size_mode: values.size_mode || 'fixed',
-          fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-          contract_multiplier: contractMultiplier,
-          use_trailing_stop: false
-        };
-      } else if (strategyType === 'MA55TouchExitStrategy') {
-        params = {
-            ma_period: 55,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier,
-            weak_threshold: 7.0
-        };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy' || isDirectionalMA55Strategy || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'MA20MA55PartialTakeProfitStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier,
-            take_profit_points: values.take_profit_points ? parseFloat(values.take_profit_points) : 0
-        };
-      } else if (strategyType === 'DKXStrategy') {
-        params = {
-            dkx_period: values.dkx_period ? parseInt(values.dkx_period) : 20,
-            dkx_ma_period: values.dkx_ma_period ? parseInt(values.dkx_ma_period) : 10,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'DKXPartialTakeProfitStrategy') {
-        params = {
-            dkx_period: values.dkx_period ? parseInt(values.dkx_period) : 20,
-            dkx_ma_period: values.dkx_ma_period ? parseInt(values.dkx_ma_period) : 10,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier,
-            take_profit_points: values.take_profit_points ? parseFloat(values.take_profit_points) : 0
-        };
-      } else if (strategyType === 'DKXFixedTPSLStrategy') {
-        params = {
-            dkx_period: values.dkx_period ? parseInt(values.dkx_period) : 20,
-            dkx_ma_period: values.dkx_ma_period ? parseInt(values.dkx_ma_period) : 10,
-            take_profit_points: values.take_profit_points ? parseFloat(values.take_profit_points) : 100,
-            stop_loss_points: values.stop_loss_points ? parseFloat(values.stop_loss_points) : 50,
-            atr_period: 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'DualMAFixedTPSLStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
-            ma_type: values.ma_type || 'SMA',
-            sl_mode: values.sl_mode || 'points',
-            sl_value: values.sl_value ? parseFloat(values.sl_value) : 50.0,
-            tp_mode: values.tp_mode || 'points',
-            tp_value: values.tp_value ? parseFloat(values.tp_value) : 100.0,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'MA20MA55RiskRewardStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
-            risk_reward_ratio: values.risk_reward_ratio ? parseFloat(values.risk_reward_ratio) : 2.0,
-            atr_period: values.atr_period ? parseInt(values.atr_period) : 14,
-            atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 2.0,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'MA5MA20CrossoverStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 5,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : 20,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      } else if (strategyType === 'MA5MA55CrossoverStrategy') {
-        params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 5,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
-            allow_reverse: values.allow_reverse !== undefined ? values.allow_reverse : true,
-            risk_per_trade: riskPerTrade,
-            equity_percent: equityPercent,
-            margin_rate: marginRate,
-            size_mode: values.size_mode || 'fixed',
-            fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
-            contract_multiplier: contractMultiplier
-        };
-      }
-
-      if (isDirectionalMA55Strategy) params.size_mode = 'fixed';
-      params.entry_delay_bars = Number(values.entry_delay_bars);
-      params.exit_delay_bars = Number(values.exit_delay_bars);
-      setCurrentParams(params);
-
-      // Capture every request before handing the queue to the app-level task.
-      const tasks = targets.map(target => {
-          const symbolCode = target.base_symbol;
-          // 获取品种特定的 multiplier
-          const symbolObj = symbols.find(s => s.code === symbolCode);
-          const specificMultiplier = symbolObj ? symbolObj.multiplier : contractMultiplier;
-
-          // 复制并覆盖 multiplier
-          const specificParams = { ...params, contract_multiplier: specificMultiplier };
-
-          let payload = {
-            symbol: symbolCode,
-            period: values.period,
-            market_type: values.market_type || 'futures',
-            data_source: values.data_source || 'main',
-            data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
-            strategy_params: specificParams,
-            initial_cash: parseFloat(values.initial_cash || 1000000),
-            auto_optimize: isMA144SignalStrategy ? false : autoOptimize,
-            strategy_name: strategyType
-          };
-
-          if (values.date_range && values.date_range.length === 2) {
-            payload.start_date = values.date_range[0].format('YYYY-MM-DD');
-            payload.end_date = values.date_range[1].format('YYYY-MM-DD');
-          }
-          payload = applyContractBacktest(payload, target.contract_month);
-          return { payload, symbolName: symbolObj?.name?.match(/\(([^)]+)\)/)?.[1] || symbolObj?.name };
+      if (!selectedStrategies.length) throw new Error('请至少选择一个策略');
+      const configs = { ...strategyConfigs, [strategyType]: pickStrategyParameters(values) };
+      setStrategyConfigs(configs);
+      const tasks = selectedStrategies.flatMap(name => {
+          const strategyValues = { ...values, ...defaultStrategyParameters(name), ...configs[name] };
+          const params = buildStrategyParameters(name, strategyValues);
+          return targets.map(target => {
+              const symbolObj = symbols.find(item => item.code === target.base_symbol);
+              let payload = {
+                  symbol: target.base_symbol, period: values.period, market_type: values.market_type || 'futures',
+                  data_source: values.data_source || 'main',
+                  data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
+                  strategy_name: name, strategy_params: { ...params, contract_multiplier: symbolObj?.multiplier || values.contract_multiplier || 1 },
+                  initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) ? false : autoOptimize,
+              };
+              if (values.date_range?.length === 2) {
+                  payload.start_date = values.date_range[0].format('YYYY-MM-DD');
+                  payload.end_date = values.date_range[1].format('YYYY-MM-DD');
+              }
+              payload = applyContractBacktest(payload, target.contract_month);
+              return { payload, symbolName: symbolObj?.name };
+          });
       });
+      setCurrentParams(tasks[0].payload.strategy_params);
       setSavedFormValues({ ...values });
-      await startBacktest({ tasks, strategy: strategyType, period: values.period,
+      await startBacktest({ tasks, strategy: selectedStrategies.length > 1 ? '多策略回测' : strategyType, period: values.period,
         provider: tasks[0].payload.data_provider,
-        unit: normalizeContractMonths(values.contract_month).length ? '合约' : '品种' });
+        unit: selectedStrategies.length > 1 ? '组合' : normalizeContractMonths(values.contract_month).length ? '合约' : '品种' });
 
     } catch (error) {
       console.error(error);
@@ -508,7 +328,7 @@ const BacktestPage = () => {
       for (const payload of payloads) {
         await axios.post('http://localhost:8000/api/backtest/save', payload);
       }
-      message.success(payloads.length > 1 ? `已保存 ${payloads.length} 个品种的回测结果` : '回测结果已保存');
+      message.success(payloads.length > 1 ? `已保存 ${payloads.length} 项回测结果` : '回测结果已保存');
     } catch (error) {
       message.error('保存失败: ' + error.message);
     }
@@ -522,6 +342,7 @@ const BacktestPage = () => {
                 <Form form={form} layout="vertical" onFinish={onFinish} 
                     onValuesChange={(changedValues, allValues) => {
                         setSavedFormValues(allValues);
+                        setStrategyConfigs(previous => ({...previous,[strategyType]:pickStrategyParameters(allValues)}));
                     }}
                     initialValues={{
                     market_type: 'futures',
@@ -625,124 +446,17 @@ const BacktestPage = () => {
                     quoteInfo={quoteInfo} 
                 />
 
-                <Form.Item label="选择策略">
-                    <Select value={strategyType} onChange={(val) => {
-                        setStrategyType(val);
-                        setSavedStrategyType(val);
-                        // 切换策略时重置默认值
-                        if (['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(val)) {
-                            form.setFieldsValue({ fast_period: 20, slow_period: 55, size_mode: 'fixed', fixed_size: 20 });
-                        } else if (getMA144ExitStrategy(val) || ['MA20MA144LongOnlyStrategy', 'MA20MA144ShortOnlyStrategy', 'MA20MA144LongShortStrategy'].includes(val)) {
-                            setAutoOptimize(false);
-                            form.setFieldsValue({ fast_period: 20, slow_period: 144, exit_period: getMA144ExitStrategy(val) ? 144 : 55, size_mode: 'fixed', fixed_size: 20 });
-                        } else if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy' || val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
-                            let initialValues = {
-                                atr_period: 14,
-                                atr_multiplier: 3.0,
-                                size_mode: 'fixed',
-                                fixed_size: 20,
-                                risk_per_trade: 0.02
-                            };
-                            
-                            if (val === 'MA55BreakoutStrategy' || val === 'MA55TouchExitStrategy') {
-                                initialValues.ma_period = 55;
-                                initialValues.macd_fast = 12;
-                                initialValues.macd_slow = 26;
-                                initialValues.macd_signal = 9;
-                        } else if (val === 'MA20MA55CrossoverStrategy' || val === 'MA20MA55PartialTakeProfitStrategy' || val === 'StockMA20MA55LongOnlyStrategy' || val === 'DualMAFixedTPSLStrategy' || val === 'MA20MA55RiskRewardStrategy' || val === 'MA5MA20CrossoverStrategy' || val === 'MA5MA55CrossoverStrategy' || val === 'MA20MA60CrossoverStrategy') {
-                                initialValues.fast_period = 20;
-                                initialValues.slow_period = 55;
-                                
-                                if (val === 'MA5MA20CrossoverStrategy') {
-                                    initialValues.fast_period = 5;
-                                    initialValues.slow_period = 20;
-                                } else if (val === 'MA5MA55CrossoverStrategy') {
-                                    initialValues.fast_period = 5;
-                                    initialValues.slow_period = 55;
-                                    initialValues.allow_reverse = true;
-                                } else if (val === 'MA20MA60CrossoverStrategy') {
-                                    initialValues.fast_period = 20;
-                                    initialValues.slow_period = 60;
-                                } else if (val === 'MA20MA55PartialTakeProfitStrategy') {
-                                    initialValues.take_profit_points = 50;
-                                } else if (val === 'DualMAFixedTPSLStrategy') {
-                                    initialValues.ma_type = 'SMA';
-                                    initialValues.sl_mode = 'points';
-                                    initialValues.sl_value = 50;
-                                    initialValues.tp_mode = 'points';
-                                    initialValues.tp_value = 100;
-                                } else if (val === 'MA20MA55RiskRewardStrategy') {
-                                    initialValues.risk_reward_ratio = 2.0;
-                                    initialValues.atr_multiplier = 2.0;
-                                }
-                            }
-                            
-                            form.setFieldsValue(initialValues);
-                        } else if (val === 'TrendFollowingStrategy') {
-                            form.setFieldsValue({
-                                fast_period: 10,
-                                slow_period: 30,
-                                atr_period: 14,
-                                atr_multiplier: 2.0,
-                                risk_per_trade: 0.02
-                            });
-                        } else if (val === 'DKXStrategy') {
-                            form.setFieldsValue({
-                                dkx_period: 20,
-                                dkx_ma_period: 10,
-                                atr_period: 14,
-                                atr_multiplier: 3.0,
-                                size_mode: 'fixed',
-                                fixed_size: 20,
-                                risk_per_trade: 0.02
-                            });
-                        } else if (val === 'DKXPartialTakeProfitStrategy') {
-                            form.setFieldsValue({
-                                dkx_period: 20,
-                                dkx_ma_period: 10,
-                                atr_period: 14,
-                                atr_multiplier: 3.0,
-                                size_mode: 'fixed',
-                                fixed_size: 20,
-                                risk_per_trade: 0.02,
-                                take_profit_points: 50
-                            });
-                        } else if (val === 'DKXFixedTPSLStrategy') {
-                            form.setFieldsValue({
-                                dkx_period: 20,
-                                dkx_ma_period: 10,
-                                atr_period: 14,
-                                atr_multiplier: 3.0,
-                                size_mode: 'fixed',
-                                fixed_size: 20,
-                                risk_per_trade: 0.02,
-                                take_profit_points: 100,
-                                stop_loss_points: 50
-                            });
-                        }
-                        setSavedFormValues(form.getFieldsValue(true));
-                    }}>
-                        <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
-                        <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
-                        <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
-                        <Option value="MA20MA55LongOnlyStrategy">20/55双均线交叉多（只做多）</Option>
-                        <Option value="MA20MA55ShortOnlyStrategy">20/55双均线交叉空（只做空）</Option>
-                        <Option value="MA20MA60CrossoverStrategy">20/60双均线交叉(多空)</Option>
-                        <Option value="MA20MA144LongOnlyStrategy">20/144金叉做多·20/55死叉离场</Option>
-                        <Option value="MA20MA144ShortOnlyStrategy">20/144死叉做空·20/55金叉离场</Option>
-                        <Option value="MA20MA144LongShortStrategy">20/144多空入场·20/55交叉离场</Option>
-                        {ma144ExitStrategyOptions.map(option => <Option key={option.value} value={option.value}>{option.label}</Option>)}
-                        <Option value="MA5MA20CrossoverStrategy">5/20双均线交叉(多空)</Option>
-                        <Option value="MA5MA55CrossoverStrategy">5/55日均线多空交叉</Option>
-                        <Option value="MA20MA55RiskRewardStrategy">20/55双均线+盈亏比优化</Option>
-                        <Option value="StockMA20MA55LongOnlyStrategy">20/55双均线多头(股票)</Option>
-                        <Option value="MA20MA55PartialTakeProfitStrategy">20/55双均线+盈利平半仓</Option>
-                        <Option value="DualMAFixedTPSLStrategy">20/55双均线+固定止盈止损</Option>
-                        <Option value="DKXStrategy">DKX多空线策略</Option>
-                        <Option value="DKXPartialTakeProfitStrategy">DKX多空线+盈利平半仓</Option>
-                        <Option value="DKXFixedTPSLStrategy">DKX多空线+固定止盈止损</Option>
-                        <Option value="TrendFollowingStrategy">双均线趋势跟踪</Option>
-                    </Select>
+                <Form.Item label="选择策略（可多选）" required>
+                    <Select id="strategy_selection" mode="multiple" showSearch optionFilterProp="label" value={selectedStrategies}
+                        options={strategyOptions} disabled={loading} placeholder="至少选择一个策略"
+                        onChange={names => { setSelectedStrategies(names); if (names.length && !names.includes(strategyType)) activateStrategy(names[0]); }} />
+                </Form.Item>
+                {selectedStrategies.length > 1 && <Alert type="info" showIcon style={{ marginBottom:16 }}
+                    message={`已选 ${selectedStrategies.length} 个策略，将与所选品种或合约逐一组合回测`}
+                    description="品种、日期、资金、固定手数及开平仓 K 线共用；切换下方策略可分别配置参数。" />}
+                <Form.Item label="当前策略参数">
+                    <Select id="strategy_editor" value={strategyType} disabled={loading || !selectedStrategies.length}
+                        options={strategyOptions.filter(item => selectedStrategies.includes(item.value))} onChange={activateStrategy} />
                 </Form.Item>
 
                 {isDirectionalMA55Strategy && <Alert type="info" showIcon style={{ marginBottom: 16 }}

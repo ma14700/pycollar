@@ -1,4 +1,6 @@
 import { ma144ExitStrategyOptions } from './ma144ExitStrategies.js';
+import { analysisSymbols } from './contractAnalysis.js';
+import { normalizeContractMonths } from './contractBacktest.js';
 
 export const tomorrowStrategyOptions = [
     ...ma144ExitStrategyOptions,
@@ -23,11 +25,12 @@ export const tomorrowStrategyOptions = [
 export const strategyParameterKeys = [...new Set(tomorrowStrategyOptions.flatMap(option => Object.keys(option.defaults)))];
 
 export function buildTomorrowAnalysisRequest(values) {
-    const { symbols, market_type, period, strategy_name, data_provider, data_source, ...parameters } = values;
+    const { symbols, market_type, period, strategy_name, data_provider, data_source, contract_month, ...parameters } = values;
+    const contracts = normalizeContractMonths(contract_month);
     return {
-        symbols: [...symbols], market_type, period, strategy_name,
-        data_provider: data_provider || (market_type === 'stock' ? 'akshare' : 'tqsdk'),
-        data_source: data_source || 'main',
+        symbols: analysisSymbols(symbols, contracts, market_type), market_type, period, strategy_name,
+        data_provider: contracts.length ? 'tqsdk' : data_provider || (market_type === 'stock' ? 'akshare' : 'tqsdk'),
+        data_source: contracts.length ? 'main' : data_source || 'main',
         strategy_params: Object.fromEntries(Object.entries(parameters).filter(([, value]) => value !== '' && value !== null && value !== undefined)),
     };
 }

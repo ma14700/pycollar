@@ -35,6 +35,23 @@ def price_frame(prices=None, period='D'):
 
 
 class TomorrowStrategyTests(unittest.TestCase):
+    def test_specific_contract_batch_and_detail_preserve_exact_instrument(self):
+        def load(*args, **kwargs):
+            symbol = kwargs.get('symbol', args[0] if args else None)
+            return price_frame() if symbol == 'JM2701' else price_frame(np.arange(320) + 500.)
+        with patch.object(engine, 'fetch_data', side_effect=load) as fetch, contextlib.redirect_stdout(io.StringIO()):
+            rows = engine.BacktestEngine().analyze_batch(['JM2701','JM2605'], 'daily', {'fixed_size': 1},
+                                                        data_provider='tqsdk')
+            self.assertEqual([row['symbol'] for row in rows], ['JM2701','JM2605'])
+            self.assertTrue(all('error' not in row for row in rows))
+            self.assertNotEqual(rows[0]['price'], rows[1]['price'])
+            for row in rows:
+                self.assertEqual(row['analysis_request']['symbol'], row['symbol'])
+                detail = engine.BacktestEngine().analyze_detail(**row['analysis_request'])
+                self.assertEqual(detail['data_info']['symbol'], row['symbol'])
+                self.assertEqual(detail['position_state']['size'], row['size'])
+            self.assertTrue(all(call.kwargs['symbol'] in ['JM2701','JM2605'] for call in fetch.call_args_list))
+
     def detail(self, frame, name='TrendFollowingStrategy', params=None, **kwargs):
         with patch.object(engine, 'fetch_data', return_value=frame), contextlib.redirect_stdout(io.StringIO()):
             return engine.BacktestEngine().analyze_detail('JM0', 'daily', params or {},

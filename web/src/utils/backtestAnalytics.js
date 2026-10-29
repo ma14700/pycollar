@@ -20,7 +20,7 @@ function savedTimestamp(value) {
     return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function tradingTimestamp(value) {
+export function tradingTimestamp(value) {
     if (!value) return null;
     let raw = String(value).replace(' ', 'T');
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) raw += 'T00:00:00';

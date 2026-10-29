@@ -12,6 +12,8 @@ const MetricsPanel = ({ metrics }) => {
     if (!metrics) return null;
 
     const verified = metrics.calculation_version >= 2;
+    const marginReturn = metrics.one_hand_return_basis === 'entry_margin';
+    const stockReturn = metrics.one_hand_return_basis === 'entry_notional';
 
     const toNumber = (val) => {
         if (val === undefined || val === null || val === '') return null;
@@ -41,7 +43,7 @@ const MetricsPanel = ({ metrics }) => {
       { key: '9', metric: '单手累计净利润', tip: '每笔已平仓交易净利润 ÷ 该笔累计开仓手数，再求和；扣除开平仓手续费。动态手数时不等于账户净利除以最大持仓', value: fmt(metrics.one_hand_net_profit), icon: <TransactionOutlined />, color: getValueColor(metrics.one_hand_net_profit), bg: '#e6fffb', isPnl: true },
       { key: '10', metric: '最大净盈利点', tip: '每笔净利润 ÷（累计开仓手数 × 合约乘数）的最大正值；没有盈利交易时为 0', value: fmt(metrics.max_profit_points), icon: <RiseOutlined />, color: '#f5222d', bg: '#fff1f0' },
       { key: '11', metric: '最大净亏损点', tip: '每笔净利润 ÷（累计开仓手数 × 合约乘数）的最小负值；没有亏损交易时为 0', value: fmt(metrics.max_loss_points), icon: <FallOutlined />, color: '#2f54eb', bg: '#f0f5ff' },
-      { key: '12', metric: verified ? '单手累计收益率（名义）' : '单手收益率（旧口径）', tip: '每笔净利润 ÷ 开仓名义金额，再求和；名义金额包含合约乘数。不是账户收益率、保证金收益率或复利收益率', value: fmtPct(metrics.one_hand_profit_pct), icon: <PercentageOutlined />, color: getValueColor(metrics.one_hand_profit_pct), bg: '#fff0f6', isPnl: true },
+      { key: '12', metric: marginReturn ? '单手累计收益率（保证金）' : stockReturn ? '单手累计收益率（全额本金）' : verified ? '单手累计收益率（旧名义口径）' : '单手收益率（旧口径）', tip: marginReturn ? '每笔单手净利润 ÷ 对应单手开仓保证金 × 100%，再累计。开仓保证金 = 实际开仓价 × 合约乘数 × 配置保证金率；净利润扣除开平仓手续费。加仓按各次实际开仓金额加权，不是复利收益率。' : '股票以全额开仓本金为分母；旧记录可能使用名义金额口径，请重新回测。', value: fmtPct(metrics.one_hand_profit_pct), icon: <PercentageOutlined />, color: getValueColor(metrics.one_hand_profit_pct), bg: '#fff0f6', isPnl: true },
       { key: '13', metric: '账户收益率', value: fmtPct(accountReturn(metrics)), tip: '账户净利润 ÷ 初始资金 × 100%；账户权益包含未平仓浮动盈亏', icon: <PercentageOutlined />, color: getValueColor(metrics.net_profit), bg: '#fff0f6' },
       { key: '14', metric: '累计手续费', value: fmt(metrics.total_commission), tip: '所有实际成交的开平仓手续费之和，暂按成交名义金额的 0.01% / 边估算', icon: <AccountBookOutlined />, color: '#595959', bg: '#fafafa' },
     ];
@@ -49,6 +51,7 @@ const MetricsPanel = ({ metrics }) => {
     return (
         <>
         {!verified && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="此结果使用旧计算口径，请重新运行回测以获得修正后的权益、回撤和单手统计。" />}
+        {verified && !marginReturn && !stockReturn && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="此记录的单手收益率按旧名义金额计算，重新回测后将按开仓保证金计算。" />}
         {verified && <div style={{ color: '#64748b', fontSize: 12, marginBottom: 16 }}>手续费统一按成交额 0.01% / 边估算，未计滑点；期货按开仓均价冻结保证金并按 K 线盯市，未模拟保证金率调整及强平。旧记录需重新回测。</div>}
         <Row gutter={[16, 16]}>
             {data.map(item => (

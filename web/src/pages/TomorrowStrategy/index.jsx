@@ -5,6 +5,7 @@ import axios from 'axios';
 import ChartPanel from '../../components/ChartPanel';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
+import ContractMonthSelect from '../../components/ContractMonthSelect';
 import { tomorrowStrategyOptions, strategyParameterKeys, buildTomorrowAnalysisRequest, getTomorrowDetailRequest, buildTomorrowDetailChart } from '../../utils/tomorrowStrategy';
 
 const { Option } = Select;
@@ -22,6 +23,9 @@ const TomorrowStrategy = () => {
     const [detailResult, setDetailResult] = useState(null);
     const [currentDetailSymbol, setCurrentDetailSymbol] = useState(null);
     const detailRequestId = useRef(0);
+    const selectedMarket = Form.useWatch('market_type', form) || 'futures';
+    const contractMonths = Form.useWatch('contract_month', form) || [];
+    const contractMode = selectedMarket === 'futures' && contractMonths.length > 0;
 
     useEffect(() => {
         const fetchData = async () => {
@@ -59,7 +63,7 @@ const TomorrowStrategy = () => {
     const handleMarketChange = (val) => {
         const list = val === 'stock' ? stockList : futuresList;
         setSymbols(list || []);
-        form.setFieldsValue({ symbols: [] });
+        form.setFieldsValue({ symbols: [], contract_month: [] });
         if (val === 'stock') form.setFieldsValue({ data_provider: 'akshare', data_source: 'main' });
         else form.setFieldsValue({ data_provider: 'tqsdk' });
         setResults([]);
@@ -109,7 +113,7 @@ const TomorrowStrategy = () => {
             dataIndex: 'symbol', 
             key: 'variety_name',
             render: (text) => {
-                const item = futuresList.find(f => f.code === text) || stockList.find(s => s.code === text);
+                const item = futuresList.find(f => f.code === text || f.code === `${text.match(/^[A-Za-z]+/)?.[0]}0`) || stockList.find(s => s.code === text);
                 return item ? item.name : text;
             }
         },
@@ -199,9 +203,9 @@ const TomorrowStrategy = () => {
                                     <Option value="stock">股票</Option>
                                 </Select>
                             </Form.Item>
-                            <DataProviderSelect form={form} />
+                            <DataProviderSelect form={form} disabled={contractMode} />
                             <Form.Item name="data_source" label="合约口径" initialValue="main">
-                                <Select options={[{ value: 'main', label: '主力连续' }, { value: 'weighted', label: '加权指数' }]} />
+                                <Select disabled={contractMode} options={[{ value: 'main', label: contractMode ? '具体合约' : '主力连续' }, { value: 'weighted', label: '加权指数' }]} />
                             </Form.Item>
 
                             <Form.Item 
@@ -216,6 +220,7 @@ const TomorrowStrategy = () => {
                                 </Select>
                             </Form.Item>
 
+                            <ContractMonthSelect form={form} symbolsField="symbols" disabled={loading} />
                             <Form.Item name="strategy_name" label="策略选择">
                                 <Select options={tomorrowStrategyOptions} onChange={(val) => {
                                     setStrategyType(val);

@@ -219,6 +219,18 @@ class CandleCompareTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs['period'], '5')
         self.assertEqual(result['data_info']['provider'], 'tqsdk')
 
+    def test_specific_contract_uses_its_own_cached_series_without_continuous_fallback(self):
+        with patch('core.candle_compare.fetch_data', return_value=sample()) as fetch:
+            result = compare_market_candles('JM2701', period='5', window_size=10)
+        self.assertEqual(fetch.call_args.args[0], 'JM2701')
+        self.assertTrue(fetch.call_args.kwargs['cache_contract'])
+        self.assertEqual(result['data_info']['symbol'], 'JM2701')
+        with patch('core.candle_compare.fetch_data') as fetch:
+            for provider, source in [('akshare', 'main'), ('tqsdk','weighted')]:
+                with self.assertRaisesRegex(ValueError, '具体合约对比'):
+                    compare_market_candles('SA2701', data_provider=provider, data_source=source)
+            fetch.assert_not_called()
+
     def test_ambiguous_legacy_minute_or_index_is_rejected(self):
         with patch('core.candle_compare.fetch_data') as fetch:
             for period, source in [('5', 'main'), ('daily', 'weighted')]:

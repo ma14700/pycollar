@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Col, DatePicker, Empty, Form, InputNumber, Modal, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, DatePicker, Empty, Form, InputNumber, Modal, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography } from 'antd';
 import { FundViewOutlined, SearchOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
+import ContractMonthSelect from '../../components/ContractMonthSelect';
+import { buildContractComparisons } from '../../utils/contractAnalysis';
 import { buildCandleOption, buildOverlayOption } from '../../utils/candleCompareCharts';
 import { buildFollowingDetails } from '../../utils/candleFollowingDetails';
 
@@ -22,6 +24,10 @@ const CandleComparePage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [result, setResult] = useState(null);
+    const [contractResults, setContractResults] = useState([]);
+    const [activeContract, setActiveContract] = useState('');
+    const contractMonths = Form.useWatch('contract_month', form) || [];
+    const contractMode = contractMonths.length > 0;
     const [selectedRank, setSelectedRank] = useState(1);
     const [detailMatch, setDetailMatch] = useState(null);
     const request = useRef(null);
@@ -67,6 +73,7 @@ const CandleComparePage = () => {
         setLoading(true);
         setError('');
         setResult(null);
+        setContractResults([]);
         setDetailMatch(null);
         const format = values.period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss';
         const payload = {
@@ -80,17 +87,35 @@ const CandleComparePage = () => {
             search_end: values.search_range?.[1]?.format(format),
         };
         try {
-            const { data } = await axios.post('http://localhost:8000/api/candles/compare', payload, { signal: controller.signal });
-            setResult(data);
-            setSelectedRank(data.matches[0]?.rank || 1);
-        } catch (err) {
-            if (!axios.isCancel(err)) {
-                const detail = err.response?.data?.detail;
-                setError(typeof detail === 'string' ? detail : '对比失败，请检查参数或后端连接。');
+            const runs = [];
+            for (const item of buildContractComparisons(payload, values.contract_month)) {
+                try {
+                    const { data } = await axios.post('http://localhost:8000/api/candles/compare', item, { signal: controller.signal });
+                    runs.push({ symbol: item.symbol, data });
+                } catch (failure) {
+                    if (controller.signal.aborted) return;
+                    const detail = failure.response?.data?.detail;
+                    runs.push({ symbol: item.symbol, error: typeof detail === 'string' ? detail : '对比失败，请检查参数或后端连接。' });
+                }
             }
+            if (controller.signal.aborted || request.current !== controller) return;
+            setContractResults(runs);
+            const first = runs.find(item => item.data) || runs[0];
+            setActiveContract(first.symbol);
+            setResult(first.data || null);
+            setError(first.error || '');
+            setSelectedRank(first.data?.matches[0]?.rank || 1);
+        } catch (failure) {
+            if (!controller.signal.aborted) setError(failure.message);
         } finally {
             if (request.current === controller) setLoading(false);
         }
+    };
+
+    const switchContract = symbol => {
+        const item = contractResults.find(run => run.symbol === symbol);
+        setActiveContract(symbol); setResult(item.data || null); setError(item.error || '');
+        setSelectedRank(item.data?.matches[0]?.rank || 1); setDetailMatch(null);
     };
 
     const columns = [
@@ -114,12 +139,12 @@ const CandleComparePage = () => {
             {symbolError && <Alert type="error" showIcon message={symbolError} style={{ marginBottom: 16 }} />}
             <Form form={form} layout="vertical" onFinish={runComparison} initialValues={{ market_type: 'futures', period: 'daily', data_source: 'main', window_size: 50, top_k: 5, min_similarity: 0, continuation_bars: 20, ma_periods: [] }}>
                 <Row gutter={20}>
-                    <Col xs={24} md={12} xl={6}><DataProviderSelect form={form} /></Col>
+                    <Col xs={24} md={12} xl={6}><DataProviderSelect form={form} disabled={contractMode} /></Col>
                     <Col xs={24} md={12} xl={6}>
                         <Form.Item name="symbol" label="交易品种" rules={[{ required: true, message: '请选择交易品种' }]}>
                             <Select showSearch optionFilterProp="label" placeholder="选择或搜索期货品种" options={symbols.map(item => ({ value: item.code, label: item.name }))} />
                         </Form.Item>
-                        <Form.Item name="data_source" label="合约口径"><Select disabled={provider === 'akshare'} options={[{ value: 'main', label: '主力连续' }, { value: 'weighted', label: '加权指数' }]} /></Form.Item>
+                        <Form.Item name="data_source" label="合约口径"><Select disabled={provider === 'akshare' || contractMode} options={[{ value: 'main', label: contractMode ? '具体合约' : '主力连续' }, { value: 'weighted', label: '加权指数' }]} /></Form.Item>
                     </Col>
                     <Col xs={24} md={12} xl={6}>
                         <Form.Item name="period" label="K线周期"><Select disabled={provider === 'akshare'} options={[{ value: 'daily', label: '日线' }, ...['1', '5', '15', '30', '60'].map(value => ({ value, label: `${value}分钟` }))]} /></Form.Item>
@@ -132,6 +157,7 @@ const CandleComparePage = () => {
                         <Form.Item name="continuation_bars" label="后续观察根数" tooltip="展示每段历史匹配之后的实际行情，该部分不参与相似度评分。" rules={[{ required: true }]}><InputNumber min={0} max={200} precision={0} style={{ width: '100%' }} /></Form.Item>
                     </Col>
                 </Row>
+                <ContractMonthSelect form={form} disabled={loading} />
                 <Form.Item name="ma_periods" label="均线辅助对比（可多选）" extra="可单选或全选；不选时仅比较 K 线形态。选中后，K 线占评分的 50%，所选均线合计占 50%，并显示在叠加图与两组 K 线图中。">
                     <Checkbox.Group options={[20, 60, 144].map(value => ({ value, label: `配合 ${value}${period === 'daily' ? '日线' : '周期均线'}对比` }))} />
                 </Form.Item>
@@ -144,6 +170,9 @@ const CandleComparePage = () => {
             </Form>
             <Typography.Text type="secondary">统一价格与波动幅度后比较开高低收形态；历史片段及其后续观察区间均早于基准，匹配片段之间互不重叠。相似分数不代表上涨概率。</Typography.Text>
         </Card>
+        {contractResults.length > 1 && <Tabs activeKey={activeContract} onChange={switchContract}
+            items={contractResults.map(item => ({ key: item.symbol, label: <span>{item.symbol} {item.error && <Tag color="error">失败</Tag>}</span> }))} />}
+        {activeContract && contractResults.length > 0 && <Typography.Text strong>当前对比：{activeContract}</Typography.Text>}
         {error && <Alert type="error" showIcon message="无法完成对比" description={error} />}
         {result ? <>
             <DataSourceInfo info={result.data_info} />

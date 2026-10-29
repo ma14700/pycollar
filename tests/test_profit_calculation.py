@@ -55,7 +55,8 @@ class ProfitCalculationTests(unittest.TestCase):
         self.assert_equity(result, [10000,10000,9999.8,10099.8,10199.8,10199.58,10199.58,10199.58])
         self.assertAlmostEqual(metrics['realized_net_profit'], 199.58)
         self.assertAlmostEqual(metrics['one_hand_net_profit'], 99.79)
-        self.assertAlmostEqual(metrics['one_hand_profit_pct'], 9.979)
+        self.assertAlmostEqual(metrics['one_hand_profit_pct'], 99.79)
+        self.assertEqual(metrics['one_hand_return_basis'], 'entry_margin')
         self.assertAlmostEqual(metrics['return_rate'], 1.9958)
         self.assertAlmostEqual(metrics['max_profit_points'], 9.979)
         self.assertEqual(metrics['max_loss_points'], 0)
@@ -67,6 +68,7 @@ class ProfitCalculationTests(unittest.TestCase):
         result = audit_run([100,100,100,95,90,90,90,90], {1:-2,4:'close'})
         self.assert_equity(result, [10000,10000,9999.8,10099.8,10199.8,10199.62,10199.62,10199.62])
         self.assertAlmostEqual(result['metrics']['one_hand_net_profit'],99.81)
+        self.assertAlmostEqual(result['metrics']['one_hand_profit_pct'],99.81)
         self.assertEqual(result['metrics']['max_loss_points'],0)
 
     def test_all_losing_has_no_positive_max_profit_and_drawdown_includes_float(self):
@@ -75,6 +77,7 @@ class ProfitCalculationTests(unittest.TestCase):
         m=result['metrics']
         self.assertEqual(m['max_profit_points'],0)
         self.assertAlmostEqual(m['max_loss_points'],-10.019)
+        self.assertAlmostEqual(m['one_hand_profit_pct'],-100.19)
         self.assertAlmostEqual(m['max_drawdown'],2.0038)
         self.assertEqual((m['won_trades'],m['lost_trades'],m['win_rate']), (0,1,0))
 
@@ -87,7 +90,7 @@ class ProfitCalculationTests(unittest.TestCase):
         self.assertAlmostEqual(m['realized_net_profit'],499.31)
         self.assertAlmostEqual(m['total_commission'],.69)
         self.assertAlmostEqual(m['one_hand_net_profit'],499.31/3)
-        self.assertAlmostEqual(m['one_hand_profit_pct'],499.31/3200*100)
+        self.assertAlmostEqual(m['one_hand_profit_pct'],499.31/320*100)
         self.assertEqual(m['total_trades'],1)
         self.assertEqual(m['used_size'],2)
         self.assertAlmostEqual(result['equity_curve'][-1]['value'],10499.31)
@@ -109,7 +112,7 @@ class ProfitCalculationTests(unittest.TestCase):
         result = audit_run([100,100,100,110,110,100,100,120,120,120], {1:10,2:'close',4:1,6:'close'})
         self.assertAlmostEqual(result['metrics']['max_profit_points'],19.978)
         self.assertAlmostEqual(result['metrics']['one_hand_net_profit'],99.79+199.78)
-        self.assertAlmostEqual(result['metrics']['one_hand_profit_pct'],9.979+19.978)
+        self.assertAlmostEqual(result['metrics']['one_hand_profit_pct'],99.79+199.78)
 
     def test_unclosed_position_is_not_in_win_rate_or_closed_profit(self):
         result = audit_run([100,100,100,105,110,110,110,110],{1:2},disable_auto_close=True)
@@ -137,8 +140,20 @@ class ProfitCalculationTests(unittest.TestCase):
         result=audit_run([100,100,100,105,110,110,110,110],{1:2,4:'close'},multiplier=100,market='stock',cash=30000)
         self.assert_equity(result,[30000,30000,29998,30998,31998,31995.8,31995.8,31995.8])
         self.assertAlmostEqual(result['metrics']['net_profit'],1995.8)
+        self.assertAlmostEqual(result['metrics']['one_hand_profit_pct'],9.979)
+        self.assertEqual(result['metrics']['one_hand_return_basis'],'entry_notional')
         rejected=audit_run([100]*8,{1:2},multiplier=100,market='stock',cash=10000)
         self.assertEqual(rejected['metrics']['used_size'],0)
+
+    def test_margin_rate_changes_unit_return_without_changing_profit(self):
+        for rate in (.1,.12,.2,1):
+            with self.subTest(rate=rate):
+                result=audit_run([100,100,100,105,110,110,110,110],{1:2,4:'close'},margin=rate)
+                self.assertAlmostEqual(result['metrics']['one_hand_profit_pct'],99.79/(100*10*rate)*100)
+                self.assertAlmostEqual(result['metrics']['one_hand_net_profit'],99.79)
+                self.assertAlmostEqual(result['metrics']['net_profit'],199.58)
+                self.assertAlmostEqual(result['metrics']['return_rate'],1.9958)
+                self.assertEqual(result['metrics']['one_hand_margin_rate'],rate)
 
     def test_extreme_short_loss_can_reduce_equity_below_zero_without_phantom_margin(self):
         result=audit_run([100,100,100,700,700,700,700,700],{1:-2,4:'close'})

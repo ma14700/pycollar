@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 
 from .data_loader import fetch_data
+from .market_cache import is_contract
 
 PRICE_COLUMNS = ['Open', 'High', 'Low', 'Close']
 WEIGHTS = np.array([0.15, 0.20, 0.20, 0.45])
@@ -183,12 +184,16 @@ def find_similar_candles(df, window_size=50, top_k=5, min_similarity=0,
 
 
 def compare_market_candles(symbol, period='daily', data_provider='tqsdk', data_source='main', **parameters):
+    explicit_contract = is_contract(symbol)
+    if explicit_contract and (data_provider != 'tqsdk' or data_source != 'main'):
+        raise ValueError('具体合约对比须使用天勤行情和具体合约口径')
     # The legacy loader may silently replace minute/weighted data. Do not allow
     # those ambiguous combinations in the shape-comparison feature.
     if data_provider == 'akshare' and (period != 'daily' or data_source != 'main'):
         raise ValueError('原有来源在 K 线对比中仅支持主力连续日线；分钟线或加权指数请选择天勤')
     df = fetch_data(symbol, period=period, market_type='futures',
-                    data_provider=data_provider, data_source=data_source)
+                    data_provider=data_provider, data_source=data_source,
+                    **({'cache_contract': True} if explicit_contract else {}))
     if df is None or df.empty:
         raise ValueError('未获取到行情，请检查品种、网络或天勤配置')
     df = df.sort_index().tail(10000).copy()

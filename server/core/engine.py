@@ -158,7 +158,8 @@ class BacktestEngine:
 
             def notify_trade(self, trade):
                 if trade.isclosed:
-                    stats = closed_trade_stats(trade, getattr(self.p, 'contract_multiplier', 1))
+                    margin_rate = getattr(self.p, 'margin_rate', 0.1) if market_type == 'futures' else 1.0
+                    stats = closed_trade_stats(trade, getattr(self.p, 'contract_multiplier', 1), margin_rate)
                     self.closed_trade_stats.append(stats)
                     self.accum_profit_per_hand += stats['net_per_hand']
                     self.accum_profit_pct += stats['return_pct'] / 100
@@ -595,8 +596,8 @@ class BacktestEngine:
         # 使用累计的 (PnL/Size) 之和，这样即使 size 变化也能正确反映"单位手"的盈利能力
         one_hand_net_profit = getattr(strat, 'accum_profit_per_hand', 0.0)
             
-        # Sum of each closed trade's net return on entry notional (not margin,
-        # account return, or compounded return); contract multiplier included.
+        # Sum closed trades' net returns on entry margin (full funds for stocks).
+        # This is a per-hand measure, not account return or compounded return.
         one_hand_profit_pct = getattr(strat, 'accum_profit_pct', 0.0) * 100.0
 
         # 准备 K 线数据
@@ -859,7 +860,9 @@ class BacktestEngine:
                 "one_hand_net_profit": one_hand_net_profit,
                 "max_profit_points": max_profit_points,
                 "max_loss_points": max_loss_points,
-                "one_hand_profit_pct": one_hand_profit_pct
+                "one_hand_profit_pct": one_hand_profit_pct,
+                "one_hand_return_basis": 'entry_margin' if market_type == 'futures' else 'entry_notional',
+                "one_hand_margin_rate": strategy_params.get('margin_rate', 0.1) if market_type == 'futures' else 1.0
             },
             "logs": final_logs
         }

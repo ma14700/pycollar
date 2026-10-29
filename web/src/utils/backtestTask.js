@@ -21,13 +21,13 @@ export function createBacktestTask(request, now = Date.now) {
             try {
                 for (const { payload, symbolName } of queue) {
                     update({ activeRun: { ...state.activeRun, symbol: payload.symbol, symbolName,
-                        provider: payload.data_provider } });
+                        provider: payload.data_provider, strategy: payload.strategy_name } });
                     try {
                         const data = await request(payload);
-                        items.push({ symbol: payload.symbol, success: true,
+                        items.push({ symbol: payload.symbol, strategy_name: payload.strategy_name, success: true,
                             data: { ...data, backtest_request: payload } });
                     } catch (error) {
-                        items.push({ symbol: payload.symbol, success: false,
+                        items.push({ symbol: payload.symbol, strategy_name: payload.strategy_name, success: false,
                             error: error.response?.data?.detail || error.message || '回测请求失败' });
                     }
                     update({ activeRun: { ...state.activeRun, completed: items.length,

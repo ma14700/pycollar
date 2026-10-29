@@ -12,6 +12,8 @@ export const BacktestProvider = ({ children }) => {
   const [symbols, setSymbols] = useState([]);
   const [savedFormValues, setSavedFormValues] = useState(null);
   const [savedStrategyType, setSavedStrategyType] = useState('MA55BreakoutStrategy');
+  const [selectedStrategies, setSelectedStrategies] = useState(['MA55BreakoutStrategy']);
+  const [strategyConfigs, setStrategyConfigs] = useState({});
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);
 
@@ -29,6 +31,7 @@ export const BacktestProvider = ({ children }) => {
       symbols, setSymbols,
       savedFormValues, setSavedFormValues,
       savedStrategyType, setSavedStrategyType,
+      selectedStrategies, setSelectedStrategies, strategyConfigs, setStrategyConfigs,
       autoOptimize, setAutoOptimize, currentParams, setCurrentParams
     }}>
       {children}
