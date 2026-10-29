@@ -100,3 +100,29 @@ test('CSV quotes multiline text and prevents formula execution while preserving 
     assert.ok(csv.startsWith('\uFEFF')); assert.ok(csv.includes('"\'=1+1"'));
     assert.ok(csv.includes('"-12"')); assert.ok(csv.includes('hello,""quoted""\nline'));
 });
+
+test('batch logs carry actual contract and strategy through filtering and CSV', () => {
+    const log='2026-10-29, 交易利润, 毛利 100, 净利 90';
+    const results={isBatch:true,items:[
+        {success:true,symbol:'JM0',strategy_name:'fallback',data:{data_info:{symbol:'JM2701'},backtest_request:{symbol:'JM2701',strategy_name:'MA20MA144LongOnlyStrategy'},logs:[log]}},
+        {success:true,symbol:'JM2605',strategy_name:'MA20MA144ShortOnlyStrategy',data:{logs:[log]}},
+        {success:true,symbol:'JM2701',data:{backtest_request:{symbol:'JM2701',strategy_name:'MA5MA55CrossoverStrategy'},logs:[log]}},
+        {success:false,symbol:'JM0',data:{logs:[log]}},
+    ]};
+    const rows=flattenResultLogs(results);
+    assert.deepEqual(rows.map(row=>row.symbol),['JM2701','JM2605','JM2701']);
+    assert.equal(rows[0].strategy,'MA20MA144LongOnlyStrategy');
+    assert.match(rows[0].strategyLabel,/金叉做多/);
+    assert.equal(new Set(rows.map(row=>row.key)).size,3);
+    assert.equal(filterLogRows(rows,{symbol:'JM2701'}).length,2);
+    const filtered=filterLogRows(rows,{symbol:'JM2701',strategy:'MA5MA55CrossoverStrategy'});
+    assert.equal(filtered.length,1);assert.equal(filterLogRows(rows,{query:'死叉做空'}).length,1);
+    const csv=logsCsv(filtered);
+    assert.match(csv,/合约\/品种/);assert.match(csv,/策略代码/);assert.match(csv,/JM2701/);assert.match(csv,/MA5MA55CrossoverStrategy/);
+    assert.doesNotMatch(csv,/JM2605/);
+});
+
+test('single saved detail can recover contract from submitted request when metadata is absent',()=>{
+    const rows=flattenResultLogs({backtest_request:{symbol:'SA2701',strategy_name:'MA20MA144ShortOnlyStrategy'},logs:['2026-10-29, 测试']});
+    assert.equal(rows[0].symbol,'SA2701');assert.equal(rows[0].strategy,'MA20MA144ShortOnlyStrategy');
+});

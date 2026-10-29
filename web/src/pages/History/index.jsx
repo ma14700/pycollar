@@ -3,7 +3,7 @@ import { Alert, Button, Card, DatePicker, Descriptions, Empty, Input, Modal, Pop
 import { ReloadOutlined, HistoryOutlined, DeleteOutlined, ArrowLeftOutlined, LineChartOutlined, SearchOutlined, TrophyOutlined, RiseOutlined, FundOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { strategyNameMap, periodMap } from '../../constants';
-import { getSymbolName } from '../../utils';
+import { getSymbolLabel } from '../../utils';
 import MetricsPanel from '../../components/MetricsPanel';
 import ChartPanel from '../../components/ChartPanel';
 import DataSourceInfo from '../../components/DataSourceInfo';
@@ -33,7 +33,8 @@ export default function HistoryPage() {
     const [compareError, setCompareError] = useState('');
     const detailRequest = useRef(null);
     const detailResults = useMemo(() => viewing?.detail_data ? {
-        ...viewing.detail_data, data_info: { ...viewing.detail_data.data_info, symbol: viewing.symbol },
+        ...viewing.detail_data, data_info: { ...viewing.detail_data.data_info, symbol: viewing.detail_data.data_info?.symbol || viewing.symbol },
+        backtest_request: { strategy_name:viewing.strategy_name, ...viewing.detail_data.backtest_request },
     } : null, [viewing]);
 
     const loadRecords = async () => {
@@ -42,7 +43,7 @@ export default function HistoryPage() {
             const { data } = await axios.get('http://localhost:8000/api/backtest/list');
             setRecords((Array.isArray(data) ? data : []).map(record => normalizeHistoryRecord({ ...record,
                 strategyLabel: strategyNameMap[record.strategy_name] || record.strategy_name,
-                symbolLabel: getSymbolName(record.symbol),
+                symbolLabel: getSymbolLabel(record.symbol),
             })));
         } catch { setError('获取回测记录失败，请检查后端连接后重试。'); }
         finally { setLoading(false); }
@@ -130,7 +131,7 @@ export default function HistoryPage() {
         const metrics = Object.fromEntries(Object.entries(rawMetrics).map(([key, value]) => [key, finiteNumber(value)]));
         return <div className="analysis-page">
             <AnalysisHero icon={<FundOutlined />} eyebrow={`回测档案 / #${viewing.id}`} title={strategyNameMap[viewing.strategy_name] || viewing.strategy_name}
-                description={`${getSymbolName(viewing.symbol)} · ${periodMap[viewing.period] || viewing.period} · ${savedTime(normalizeHistoryRecord(viewing).savedAt)}`}
+                description={`${getSymbolLabel(viewing.symbol)} · ${periodMap[viewing.period] || viewing.period} · ${savedTime(normalizeHistoryRecord(viewing).savedAt)}`}
                 extra={<Button icon={<ArrowLeftOutlined />} onClick={() => setViewing(null)}>返回历史记录</Button>} />
             <DataSourceInfo info={viewing.detail_data?.data_info} />
             <Tabs className="analysis-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
@@ -156,9 +157,9 @@ export default function HistoryPage() {
             <AnalysisStat title="最佳单次收益率" value={formatPercent(summary.best?.returnPct)} detail={summary.best ? `#${summary.best.id} · ${summary.best.symbolLabel}` : '暂无可统计的收益数据'} icon={<TrophyOutlined />} color={valueColor(summary.best?.returnPct)} loading={loading} />
         </div>
         <div className="analysis-filter-card"><div className="analysis-filters">
-            <Input className="analysis-filter-query" prefix={<SearchOutlined style={{ color: '#94a3b8' }} />} placeholder="搜索策略、品种或记录编号" allowClear value={filters.query || ''} onChange={event => update({ query: event.target.value })} />
+            <Input className="analysis-filter-query" prefix={<SearchOutlined style={{ color: '#94a3b8' }} />} placeholder="搜索策略、合约代码或记录编号" allowClear value={filters.query || ''} onChange={event => update({ query: event.target.value })} />
             <Select aria-label="历史策略" placeholder="全部策略" style={{ width: 210 }} allowClear value={filters.strategy} onChange={strategy => update({ strategy })} options={[...new Set(records.map(record => record.strategy_name))].map(value => ({ value, label: strategyNameMap[value] || value }))} />
-            <Select aria-label="历史品种" placeholder="全部品种" style={{ width: 135 }} allowClear value={filters.symbol} onChange={symbol => update({ symbol })} options={[...new Set(records.map(record => record.symbol))].map(value => ({ value, label: getSymbolName(value) }))} />
+            <Select aria-label="历史品种" placeholder="全部合约 / 品种" style={{ width: 190 }} showSearch optionFilterProp="label" allowClear value={filters.symbol} onChange={symbol => update({ symbol })} options={[...new Set(records.map(record => record.symbol))].map(value => ({ value, label: getSymbolLabel(value) }))} />
             <Select aria-label="盈亏结果" placeholder="全部盈亏" style={{ width: 120 }} allowClear value={filters.outcome} onChange={outcome => update({ outcome })} options={[{ value: 'profit', label: '盈利' }, { value: 'loss', label: '亏损' }, { value: 'flat', label: '持平' }]} />
             <DatePicker.RangePicker aria-label="记录保存日期" value={filters.range || null} onChange={range => update({ range, start: range?.[0]?.format('YYYY-MM-DD'), end: range?.[1]?.format('YYYY-MM-DD') })} />
             <Button type="text" onClick={() => { setFilters({}); setPage(1); }}>重置</Button>

@@ -1,4 +1,4 @@
-import { symbolMap, futuresMap } from '../constants';
+import { symbolMap, futuresMap } from '../constants/index.js';
 
 export { parseLogItem } from './logParser.js';
 
@@ -36,6 +36,12 @@ export const getSymbolName = (symbol) => {
   }
   
   return symbol;
+};
+
+// Keep the delivery code visible when multiple contracts share a product name.
+export const getSymbolLabel = symbol => {
+    const name = getSymbolName(symbol);
+    return symbol && name !== symbol ? `${name}（${symbol}）` : name;
 };
 
 export const getValueColor = (val) => {

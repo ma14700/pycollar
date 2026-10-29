@@ -1,4 +1,5 @@
 import { parseLogItem } from './logParser.js';
+import { strategyNameMap } from '../constants/index.js';
 
 export const finiteNumber = value => {
     if (value === null || value === undefined || String(value).trim() === '') return null;
@@ -65,19 +66,23 @@ export function summarizeHistory(records) {
 }
 
 export function flattenResultLogs(results) {
-    const runs = results?.isBatch ? (results.items || []).filter(item => item.success).map(item => ({ data: item.data, symbol: item.symbol }))
-        : [{ data: results, symbol: results?.data_info?.symbol || results?.backtest_request?.symbol || '' }];
-    return runs.flatMap(({ data, symbol }, runIndex) => (Array.isArray(data?.logs) ? data.logs : []).map((entry, index) => {
+    const runs = results?.isBatch ? (results.items || []).filter(item => item.success)
+        : [{ data: results }];
+    return runs.flatMap(({ data, symbol: fallbackSymbol, strategy_name }, runIndex) => (Array.isArray(data?.logs) ? data.logs : []).map((entry, index) => {
         const row = parseLogItem(entry, `${runIndex}:${index}`);
-        return { ...row, symbol, timestamp: tradingTimestamp(row.date), sequence: index, runIndex };
+        const symbol = data.data_info?.symbol || data.backtest_request?.symbol || fallbackSymbol || '';
+        const strategy = data.backtest_request?.strategy_name || strategy_name || data.strategy_info?.name || '';
+        const strategyLabel = strategyNameMap[strategy] || strategy || '未记录策略';
+        return { ...row, symbol, strategy, strategyLabel, timestamp: tradingTimestamp(row.date), sequence: index, runIndex };
     })).sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity) || a.runIndex - b.runIndex || a.sequence - b.sequence);
 }
 
 export function filterLogRows(rows, filters = {}) {
     const query = (filters.query || '').trim().toLowerCase();
     return rows.filter(row => (!filters.symbol || row.symbol === filters.symbol)
+        && (!filters.strategy || row.strategy === filters.strategy)
         && (!filters.kind || row.kind === filters.kind)
-        && (!query || `${row.content} ${row.symbol} ${row.action}`.toLowerCase().includes(query))
+        && (!query || `${row.content} ${row.symbol} ${row.strategy || ''} ${row.strategyLabel || ''} ${row.action}`.toLowerCase().includes(query))
         && (!filters.start || row.date.slice(0, 10) >= filters.start)
         && (!filters.end || (row.date && row.date.slice(0, 10) <= filters.end)));
 }
@@ -118,8 +123,8 @@ export function logsCsv(rows) {
         const safe = typeof value === 'string' && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
         return `"${safe.replace(/"/g, '""')}"`;
     };
-    const header = ['时间', '品种', '类型', '动作', '价格', '数量', '费用', '结算净利', '内容'];
-    return '\uFEFF' + [header, ...rows.map(row => [row.date, row.symbol, kindNames[row.kind] || '信息', row.action, row.price, row.size, row.comm, row.isSettlement ? row.pnl : null, row.content])]
+    const header = ['时间', '合约/品种', '策略', '策略代码', '类型', '动作', '价格', '数量', '费用', '结算净利', '内容'];
+    return '\uFEFF' + [header, ...rows.map(row => [row.date, row.symbol, row.strategyLabel, row.strategy, kindNames[row.kind] || '信息', row.action, row.price, row.size, row.comm, row.isSettlement ? row.pnl : null, row.content])]
         .map(row => row.map(cell).join(',')).join('\r\n');
 }
 

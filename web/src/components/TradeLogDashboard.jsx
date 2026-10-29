@@ -20,6 +20,8 @@ export default function TradeLogDashboard({ results, filename = 'trading-logs.cs
     const filtered = useMemo(() => filterLogRows(rows, filters), [rows, filters]);
     const summary = useMemo(() => summarizeLogs(filtered), [filtered]);
     const symbols = useMemo(() => [...new Set(rows.map(row => row.symbol).filter(Boolean))], [rows]);
+    const strategies = useMemo(() => [...new Map(rows.filter(row => row.strategy).map(row => [row.strategy, {value:row.strategy,label:row.strategyLabel}])).values()], [rows]);
+    const multipleRuns = new Set(rows.map(row => row.runIndex)).size > 1;
     const latest = useMemo(() => [...filtered].reverse(), [filtered]);
     useEffect(() => { setFilters({}); setPage(1); }, [results]);
     const update = next => { setFilters(previous => ({ ...previous, ...next })); setPage(1); };
@@ -43,7 +45,8 @@ export default function TradeLogDashboard({ results, filename = 'trading-logs.cs
         graphic: [{ type: 'text', left: 'center', top: '34%', silent: true, style: { text: `${summary.count}\n日志总数`, textAlign: 'center', fill: '#34445e', font: '600 18px sans-serif', lineHeight: 25 } }],
     };
     const columns = [
-        { title: '时间 / 品种', key: 'time', width: 164, render: (_, row) => <><div className="analysis-primary">{row.date || '未标时间'}</div>{row.symbol && <span className="analysis-muted">{row.symbol}</span>}</> },
+        { title: '时间', key: 'time', width: 164, render: (_, row) => <div className="analysis-primary">{row.date || '未标时间'}</div> },
+        { title: '合约 / 策略', key: 'instrument', width: 240, render: (_, row) => <><Tag color="blue">{row.symbol || '未记录合约'}</Tag><div style={{marginTop:5,fontSize:12}}>{row.strategyLabel}</div></> },
         { title: '事件', key: 'kind', width: 110, render: (_, row) => <Tag color={kinds[row.kind].color}>{row.action || kinds[row.kind].label}</Tag> },
         { title: '价格', dataIndex: 'price', align: 'right', width: 95, render: value => <span className="analysis-num">{formatNumber(value)}</span> },
         { title: '数量', dataIndex: 'size', align: 'right', width: 75, render: value => formatNumber(value, 0) },
@@ -61,22 +64,23 @@ export default function TradeLogDashboard({ results, filename = 'trading-logs.cs
         </div>
         <div className="analysis-filter-card"><div className="analysis-filters">
             <Input className="analysis-filter-query" prefix={<SearchOutlined style={{ color: '#94a3b8' }} />} placeholder="搜索信号、交易动作或日志内容" value={filters.query || ''} allowClear onChange={event => update({ query: event.target.value })} />
-            {symbols.length > 1 && <Select aria-label="日志品种" placeholder="全部品种" allowClear value={filters.symbol} onChange={symbol => update({ symbol })} options={symbols.map(symbol => ({ value: symbol, label: symbol }))} style={{ width: 135 }} />}
+            {symbols.length > 0 && <Select aria-label="日志合约" placeholder="全部合约 / 品种" showSearch optionFilterProp="label" allowClear value={filters.symbol} onChange={symbol => update({ symbol })} options={symbols.map(symbol => ({ value: symbol, label: symbol }))} style={{ width: 170 }} />}
+            {strategies.length > 0 && <Select aria-label="日志策略" placeholder="全部策略" showSearch optionFilterProp="label" allowClear value={filters.strategy} onChange={strategy => update({ strategy })} options={strategies} style={{ width: 240 }} />}
             <Select aria-label="日志事件类型" placeholder="全部事件" allowClear value={filters.kind} onChange={kind => update({ kind })} options={Object.entries(kinds).map(([value, item]) => ({ value, label: item.label }))} style={{ width: 125 }} />
             <DatePicker.RangePicker aria-label="日志日期范围" value={filters.range || null} onChange={range => update({ range, start: range?.[0]?.format('YYYY-MM-DD'), end: range?.[1]?.format('YYYY-MM-DD') })} />
             <Button type="text" onClick={() => { setFilters({}); setPage(1); }}>重置</Button>
         </div></div>
         <div className="analysis-charts">
-            <AnalysisChart title="累计结算净利" subtitle="按当前筛选的结算日志累加，不等同于账户权益" option={profitOption} hasData={summary.points.length > 0} />
+            <AnalysisChart title="累计结算净利" subtitle={multipleRuns ? '按筛选结果汇总各独立回测的结算日志，不代表组合账户权益' : '按当前筛选的结算日志累加，不等同于账户权益'} option={profitOption} hasData={summary.points.length > 0} />
             <AnalysisChart title="日志事件分布" subtitle="区分成交、结算与策略信号" option={distributionOption} hasData={summary.count > 0} />
         </div>
         <Card variant="borderless" className="analysis-card" title={<div className="analysis-card-title">交易事件明细<small>原始日志完整保留，成交估算与最终结算分开展示</small></div>} extra={<Tooltip title="导出当前筛选范围"><Button icon={<DownloadOutlined />} disabled={!filtered.length} onClick={() => downloadLogCsv(filtered, filename)}>导出日志</Button></Tooltip>}>
             <div className="analysis-toolbar"><Space><Tag color="blue">{filtered.length} 条记录</Tag><span className="analysis-muted">最新事件优先</span></Space><Segmented aria-label="日志展示方式" value={view} onChange={setView} options={[{ label: '明细表', value: 'table' }, { label: '时间线', value: 'timeline' }]} /></div>
-            {view === 'table' ? <Table className="analysis-table" rowKey="key" dataSource={latest} columns={columns} size="middle" scroll={{ x: 1000 }}
+            {view === 'table' ? <Table className="analysis-table" rowKey="key" dataSource={latest} columns={columns} size="middle" scroll={{ x: 1250 }}
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={rows.length ? '没有符合筛选条件的日志' : '这次回测尚无交易日志'} /> }}
                 pagination={{ current: page, pageSize, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: total => `共 ${total} 条`, onChange: (nextPage, size) => { setPage(nextPage); setPageSize(size); } }} />
                 : latest.length ? <><Timeline items={latest.slice(0, 40).map(row => ({ color: kinds[row.kind].color, children: <div className="analysis-event">
-                    <div className="analysis-event-header"><Tag color={kinds[row.kind].color}>{row.action || kinds[row.kind].label}</Tag><strong>{row.symbol}</strong><span className="analysis-muted">{row.date || '未标时间'}</span>{row.isSettlement && <span className="analysis-num" style={{ color: valueColor(row.pnl) }}>{formatNumber(row.pnl)}</span>}</div>
+                    <div className="analysis-event-header"><Tag color={kinds[row.kind].color}>{row.action || kinds[row.kind].label}</Tag><Tag color="blue">{row.symbol || '未记录合约'}</Tag><strong>{row.strategyLabel}</strong><span className="analysis-muted">{row.date || '未标时间'}</span>{row.isSettlement && <span className="analysis-num" style={{ color: valueColor(row.pnl) }}>{formatNumber(row.pnl)}</span>}</div>
                     <div className="analysis-event-content">{row.content}</div>{row.isExecution && <div className="analysis-event-metrics"><span>成交价 <b>{formatNumber(row.price)}</b></span><span>数量 <b>{formatNumber(row.size, 0)}</b></span><span>手续费 <b>{formatNumber(row.comm)}</b></span></div>}
                 </div> }))} />{latest.length > 40 && <div className="analysis-note">时间线显示最新 40 条事件，完整日志请切换明细表或导出。</div>}</>
                 : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的事件" />}
