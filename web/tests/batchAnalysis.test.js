@@ -32,6 +32,33 @@ test('failed and missing result rows remain visible but cannot participate in co
     assert.equal(buildBatchAnalysis(result.failures).groups.length,0);
 });
 
+test('overall comparison retains all contracts and condition groups without adding returns or duplicating results',()=>{
+    const a=item(), b=item('JM2605','A',{initial_cash:2000,net_profit:100}), c=item('RB2701','B');
+    c.data.data_info.period='60';
+    const model=buildBatchAnalysis([a,b,c,{symbol:'BAD',success:false,error:'offline'}]);
+    assert.equal(model.groups.length,3);
+    assert.equal(model.overall.contracts,3);
+    assert.equal(model.overall.key,'all-contracts');
+    assert.deepEqual(model.overall.rows.map(row=>row.symbol),['JM2701','JM2605','RB2701']);
+    assert.deepEqual(model.overall.rows.map(row=>row.returnPct),[10,5,10]);
+    assert.equal(model.overall.rows[1].conditions.cash,2000);
+    assert.equal(model.overall.rows[2].conditions.period,'60');
+    assert.equal(model.overall.rows[0],model.groups[0].rows[0]);
+    assert.equal(new Set(model.overall.rows.map(row=>row.key)).size,3);
+    assert.equal(model.failures.length,1);
+    assert.equal(buildBatchAnalysis([]).overall,null);
+});
+
+test('overall includes the same contract under different conditions and exposes mixed unit-return bases',()=>{
+    const a=item(), b=item('JM2701','B',{one_hand_return_basis:'legacy'}), c=item('JM2701','C');
+    const model=buildBatchAnalysis([a,b,c]);
+    assert.equal(model.overall.rows.length,3);
+    assert.deepEqual(model.overall.rows.map(row=>row.key),['0','1','2']);
+    assert.equal(model.overall.contracts,1);
+    assert.equal(model.overall.conditions.basis,'mixed');
+    assert.deepEqual(model.overall.rows.map(row=>row.conditions.basis),['entry_margin','legacy','entry_margin']);
+});
+
 test('curves use initial account value, exact equity peaks and preserve absent values',()=>{
     const data=item().data;
     const curve=drawdownCurve(data);

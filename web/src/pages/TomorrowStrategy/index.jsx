@@ -6,6 +6,8 @@ import ChartPanel from '../../components/ChartPanel';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
 import ContractMonthSelect from '../../components/ContractMonthSelect';
+import PointExitInputs from '../../components/PointExitInputs';
+import { defaultAnalysisSymbols } from '../../utils/tradingDefaults';
 import { tomorrowStrategyOptions, strategyParameterKeys, buildTomorrowAnalysisRequest, getTomorrowDetailRequest, buildTomorrowDetailChart } from '../../utils/tomorrowStrategy';
 
 const { Option } = Select;
@@ -45,7 +47,7 @@ const TomorrowStrategy = () => {
                     market_type: 'futures',
                     period: 'daily',
                     strategy_name: 'TrendFollowingStrategy',
-                    symbols: fList.slice(0, 5).map(s => s.code),
+                    symbols: defaultAnalysisSymbols(fList),
                     fast_period: 10,
                     slow_period: 30,
                     use_expma: false,
@@ -63,7 +65,7 @@ const TomorrowStrategy = () => {
     const handleMarketChange = (val) => {
         const list = val === 'stock' ? stockList : futuresList;
         setSymbols(list || []);
-        form.setFieldsValue({ symbols: [], contract_month: [] });
+        form.setFieldsValue({ symbols: val === 'futures' ? defaultAnalysisSymbols(list || [], 0) : [], contract_month: [] });
         if (val === 'stock') form.setFieldsValue({ data_provider: 'akshare', data_source: 'main' });
         else form.setFieldsValue({ data_provider: 'tqsdk' });
         setResults([]);
@@ -249,6 +251,7 @@ const TomorrowStrategy = () => {
                             ))}
                             {strategyType === 'TrendFollowingStrategy' && <Form.Item name="use_expma" label="使用EMA" valuePropName="checked" preserve={false}><Switch /></Form.Item>}
                             {strategyType === 'MA5MA55CrossoverStrategy' && <Form.Item name="allow_reverse" label="允许反手" valuePropName="checked" preserve={false}><Switch /></Form.Item>}
+                            {strategyType === 'MA20MA55PointExitStrategy' && <PointExitInputs />}
                             {strategyType === 'DualMAFixedTPSLStrategy' && <>
                                 <Form.Item name="ma_type" label="均线类型" preserve={false}><Select options={[{ value: 'SMA', label: 'SMA' }, { value: 'EMA', label: 'EMA' }]} /></Form.Item>
                                 <Form.Item name="sl_mode" label="止损方式" preserve={false}><Select options={[{ value: 'points', label: '点数' }, { value: 'percent', label: '百分比' }]} /></Form.Item>

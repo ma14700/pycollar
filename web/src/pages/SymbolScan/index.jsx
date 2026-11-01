@@ -3,6 +3,8 @@ import { Card, Form, Input, Select, Button, Row, Col, message, Table, Modal, Tag
 import { PlayCircleOutlined, LineChartOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import ChartPanel from '../../components/ChartPanel';
+import PointExitInputs from '../../components/PointExitInputs';
+import { defaultAnalysisSymbols } from '../../utils/tradingDefaults';
 import { getMA144ExitStrategy, ma144ExitStrategyOptions } from '../../utils/ma144ExitStrategies';
 
 const { Option } = Select;
@@ -38,7 +40,7 @@ const SymbolScan = () => {
                     market_type: 'futures',
                     period: 'daily',
                     strategy_name: 'TrendFollowingStrategy',
-                    symbols: fList.slice(0, 5).map(s => s.code),
+                    symbols: defaultAnalysisSymbols(fList),
                     scan_window: 5,
                     fixed_size: 20,
                     margin_rate: 0.12
@@ -54,7 +56,7 @@ const SymbolScan = () => {
     const handleMarketChange = (val) => {
         const list = val === 'stock' ? stockList : futuresList;
         setSymbols(list || []);
-        form.setFieldsValue({ symbols: [] });
+        form.setFieldsValue({ symbols: val === 'futures' ? defaultAnalysisSymbols(list || [], 0) : [] });
     };
 
     const onFinish = async (values) => {
@@ -255,6 +257,7 @@ const SymbolScan = () => {
                             <Form.Item name="strategy_name" label="策略选择">
                                 <Select onChange={(val) => {
                                     setStrategyType(val);
+                                    if (val === 'MA20MA55PointExitStrategy') form.setFieldsValue({ fast_period: 20, slow_period: 55, take_profit_points: 100, stop_loss_points: 50 });
                                     const ma144ExitStrategy = getMA144ExitStrategy(val);
                                     if (ma144ExitStrategy) {
                                         form.setFieldsValue({ ...ma144ExitStrategy.defaults, size_mode: 'fixed', fixed_size: 20 });
@@ -278,6 +281,7 @@ const SymbolScan = () => {
                                     <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                                     <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
                                     <Option value="MA20MA55CrossoverStrategy">20/55双均线交叉(多空)</Option>
+                                    <Option value="MA20MA55PointExitStrategy">20/55双均线交叉(多空平仓点数)</Option>
                                     <Option value="MA20MA55LongOnlyStrategy">20/55双均线交叉多（只做多）</Option>
                                     <Option value="MA20MA55ShortOnlyStrategy">20/55双均线交叉空（只做空）</Option>
                                     {ma144ExitStrategyOptions.map(option => <Option key={option.value} value={option.value}>{option.label}</Option>)}
@@ -315,10 +319,11 @@ const SymbolScan = () => {
                                 <Input type="number" suffix="根" />
                             </Form.Item>
 
+                            {strategyType === 'MA20MA55PointExitStrategy' && <PointExitInputs />}
                             {/* Dynamic Strategy Params */}
                             {getMA144ExitStrategy(strategyType) ? (
                                 <p>{getMA144ExitStrategy(strategyType).reverses ? '固定 MA20 / MA144，金叉平空开多、死叉平多开空，按固定手数反手。' : '固定 MA20 / MA144，反向交叉离场，不加仓、不直接反手。'}</p>
-                            ) : strategyType === 'TrendFollowingStrategy' || strategyType === 'DualMAFixedTPSLStrategy' ? (
+                            ) : strategyType === 'MA20MA55PointExitStrategy' || strategyType === 'TrendFollowingStrategy' || strategyType === 'DualMAFixedTPSLStrategy' ? (
                                 <>
                                     <Row gutter={16}>
                                         <Col span={12}>

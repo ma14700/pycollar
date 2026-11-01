@@ -14,6 +14,7 @@ from core import engine, strategy
 
 
 STRATEGIES = [
+    'MA20MA55PointExitStrategy',
     'MA55BreakoutStrategy', 'MA55TouchExitStrategy', 'MA20MA55CrossoverStrategy',
     'MA20MA60CrossoverStrategy', 'MA5MA20CrossoverStrategy', 'MA5MA55CrossoverStrategy',
     'MA20MA55RiskRewardStrategy', 'StockMA20MA55LongOnlyStrategy',

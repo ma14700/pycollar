@@ -16,6 +16,7 @@ export const BacktestProvider = ({ children }) => {
   const [strategyConfigs, setStrategyConfigs] = useState({});
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);
+  const [only159Contracts, setOnly159Contracts] = useState(true);
 
   useEffect(() => {
     const run = taskState.activeRun;
@@ -32,7 +33,8 @@ export const BacktestProvider = ({ children }) => {
       savedFormValues, setSavedFormValues,
       savedStrategyType, setSavedStrategyType,
       selectedStrategies, setSelectedStrategies, strategyConfigs, setStrategyConfigs,
-      autoOptimize, setAutoOptimize, currentParams, setCurrentParams
+      autoOptimize, setAutoOptimize, currentParams, setCurrentParams,
+      only159Contracts, setOnly159Contracts
     }}>
       {children}
     </BacktestContext.Provider>

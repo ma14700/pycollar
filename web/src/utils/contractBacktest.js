@@ -1,3 +1,7 @@
+export function filterContractMonthOptions(options, enabled = true) {
+    return enabled ? options.filter(option => /^\d{2}(01|05|09)$/.test(String(option.value))) : options;
+}
+
 export function contractWindow(month) {
     if (typeof month !== 'string' || !/^\d{2}(0[1-9]|1[0-2])$/.test(month)) {
         throw new Error('合约月份须为四位 YYMM，例如 2605、2701');

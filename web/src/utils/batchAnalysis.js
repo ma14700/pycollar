@@ -42,7 +42,7 @@ export function buildBatchAnalysis(items = []) {
         if (!groups.has(key)) groups.set(key, { key, conditions, rows: [] });
         const closed = finiteNumber(metrics.total_trades);
         groups.get(key).rows.push({
-            key: String(index), symbol, strategy, data, params: request.strategy_params || {},
+            key: String(index), symbol, strategy, data, conditions, params: request.strategy_params || {},
             returnPct: accountReturn(metrics), netProfit: finiteNumber(metrics.net_profit),
             drawdown: finiteNumber(metrics.max_drawdown), winRate: finiteNumber(metrics.win_rate),
             perHandProfit: finiteNumber(metrics.one_hand_net_profit), perHandReturn: finiteNumber(metrics.one_hand_profit_pct),
@@ -51,7 +51,13 @@ export function buildBatchAnalysis(items = []) {
             equity: normalizedEquity(data), drawdowns: drawdownCurve(data),
         });
     }
-    return { groups: [...groups.values()], failures };
+    const independentGroups = [...groups.values()];
+    const rows = independentGroups.flatMap(group => group.rows).sort((a,b) => Number(a.key)-Number(b.key));
+    const bases = new Set(rows.map(row => row.conditions.basis));
+    const overall = rows.length ? { key: 'all-contracts', rows,
+        conditions: { overall: true, basis: bases.size === 1 ? rows[0].conditions.basis : 'mixed' },
+        contracts: new Set(rows.map(row => row.symbol)).size } : null;
+    return { groups: independentGroups, overall, failures };
 }
 
 export function strategyHighlights(rows) {

@@ -44,6 +44,9 @@ class BacktestEngine:
                     v = int(number) if isinstance(default, int) else number
                 valid_params[k] = v
         
+        validator = getattr(StrategyClass, 'validate_params', None)
+        if callable(validator):
+            validator(valid_params)
         return valid_params
 
     def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None):
@@ -752,7 +755,7 @@ class BacktestEngine:
             slow_period = int(strategy_params.get('macd_slow', 26))
             signal_period = int(strategy_params.get('macd_signal', 9))
             
-            close_price = df_kline['Close'].astype(float)
+            close_price = close_series
             exp1 = close_price.ewm(span=fast_period, adjust=False).mean()
             exp2 = close_price.ewm(span=slow_period, adjust=False).mean()
             dif = exp1 - exp2
@@ -760,9 +763,10 @@ class BacktestEngine:
             macd_hist = (dif - dea) * 2
             
             kline_data['macd'] = {
-                "dif": dif.fillna(0).tolist(),
-                "dea": dea.fillna(0).tolist(),
-                "hist": macd_hist.fillna(0).tolist()
+                "dif": dif.reindex(df_kline.index).tolist(),
+                "dea": dea.reindex(df_kline.index).tolist(),
+                "hist": macd_hist.reindex(df_kline.index).tolist(),
+                "periods": [fast_period, slow_period, signal_period]
             }
         except Exception as e:
             print(f"MACD Calculation Error: {e}")

@@ -498,6 +498,63 @@ class DualMAFixedTPSLStrategy(BaseStrategy):
             self.cancel_sl_tp()
             self.order = self.order_target_size(target=-self.params.fixed_size)
 
+class MA20MA55PointExitStrategy(DualMAFixedTPSLStrategy):
+    """20/55 多空反手，按实际开仓价设置全仓点数止盈、止损。"""
+    params = (('take_profit_points', 100.0), ('stop_loss_points', 50.0))
+
+    @classmethod
+    def validate_params(cls, params):
+        import math
+        for key, label in [('take_profit_points', '盈利平仓点数'), ('stop_loss_points', '亏损平仓点数')]:
+            value = float(params.get(key, getattr(cls.params, key)))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'{label}必须为大于 0 的有限数字')
+
+    @classmethod
+    def required_bars(cls, params):
+        return max(int(params.get(key, getattr(cls.params, key))) for key in ('fast_period', 'slow_period')) + 1
+
+    def __init__(self):
+        self.validate_params(dict(self.p._getkwargs()))
+        self.p.ma_type = 'SMA'
+        self.p.sl_mode = self.p.tp_mode = 'points'
+        self.p.sl_value = self.p.stop_loss_points
+        self.p.tp_value = self.p.take_profit_points
+        super().__init__()
+        self.protective_refs = set()
+
+    def place_sl_tp_orders(self, entry_price, size):
+        super().place_sl_tp_orders(entry_price, size)
+        self.protective_refs.update(order.ref for order in (self.sl_order, self.tp_order) if order is not None)
+
+    def notify_order(self, order):
+        if order.ref in self.protective_refs:
+            if order.status == order.Completed:
+                self.log('点数止损平仓' if self.sl_order and order.ref == self.sl_order.ref else '点数止盈平仓')
+                self.cancel_sl_tp()
+            if order.status in (order.Completed, order.Canceled, order.Margin, order.Rejected, order.Expired):
+                self.protective_refs.discard(order.ref)
+            # Cancellations of old protection must not clear a pending reversal.
+            return
+        BaseStrategy.notify_order(self, order)
+        if order.status in (order.Completed, order.Margin, order.Rejected):
+            self.place_sl_tp_orders(self.position.price, self.position.size)
+
+    def pre_next(self):
+        if not self.p.disable_auto_close:
+            near_end = self.data.buflen() > 0 and len(self.data) >= self.data.buflen() - 1
+            if self.p.end_date:
+                end = self.p.end_date
+                if isinstance(end, str):
+                    end = datetime.datetime.strptime(end, '%Y-%m-%d').date()
+                if isinstance(end, datetime.datetime):
+                    end = end.date()
+                near_end = near_end or self.data.datetime.date(0) >= end
+            if near_end:
+                self.cancel_sl_tp()
+        return super().pre_next()
+
+
 class DKXStrategy(BaseStrategy):
     """
     DKX多空线策略

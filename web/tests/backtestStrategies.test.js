@@ -1,4 +1,19 @@
 import test from 'node:test';
+
+test('20/55 point exits have independent positive profit/loss distances and fixed sizing',()=>{
+    const name='MA20MA55PointExitStrategy';
+    const defaults=defaultStrategyParameters(name);
+    assert.equal(defaults.fast_period,20); assert.equal(defaults.slow_period,55);
+    assert.equal(defaults.take_profit_points,100); assert.equal(defaults.stop_loss_points,50);
+    const params=buildStrategyParameters(name,{...defaults,take_profit_points:12.5,stop_loss_points:6.25,
+        fixed_size:3,size_mode:'equity_percent',entry_delay_bars:2,exit_delay_bars:4});
+    assert.equal(params.take_profit_points,12.5); assert.equal(params.stop_loss_points,6.25);
+    assert.equal(params.size_mode,'fixed'); assert.equal(params.fixed_size,3);
+    assert.equal(params.entry_delay_bars,2); assert.equal(params.exit_delay_bars,4);
+    for(const key of ['take_profit_points','stop_loss_points']) for(const value of [0,-1,'bad']) {
+        assert.throws(()=>buildStrategyParameters(name,{...defaults,[key]:value}));
+    }
+});
 import assert from 'node:assert/strict';
 import { defaultStrategyParameters, buildStrategyParameters, pickStrategyParameters, strategyOptions } from '../src/utils/backtestStrategies.js';
 import { createBacktestTask } from '../src/utils/backtestTask.js';

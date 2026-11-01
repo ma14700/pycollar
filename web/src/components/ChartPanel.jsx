@@ -2,6 +2,7 @@ import React from 'react';
 import ReactECharts from 'echarts-for-react';
 import { getProfitDistributionOption } from '../utils/profitDistribution';
 import { buildMovingAverageSeries } from '../utils/chartMovingAverages';
+import { buildKlineIndicatorPanels } from '../utils/klineIndicators';
 
 const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
     if (!results) return null;
@@ -72,9 +73,7 @@ const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
 
         // 构建数据系列
         const seriesList = [];
-        const legendData = ['K线', 'DKX', 'MADKX', '资金曲线'];
         const movingAverages = buildMovingAverageSeries(klineObj);
-        legendData.push(...movingAverages.map(line => line.name));
         
         // 预处理有效日期集合，用于过滤不在当前时间范围内的信号
         const validDatesSet = new Set(dates);
@@ -154,84 +153,15 @@ const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
             });
         }
 
-        // 资金曲线 (独立坐标轴)
-        const equitySeries = equityCurve.map(item => item ? item.value : 0);
-        const showEquity = equitySeries.length > 0;
-
-        if (showEquity) {
-            seriesList.push({
-                name: '资金曲线',
-                type: 'line',
-                xAxisIndex: 1,
-                yAxisIndex: 1,
-                data: equitySeries,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1.5, color: '#1890ff' },
-                areaStyle: { opacity: 0.15 }
-            });
-        }
-
-        const grid = [
-            {
-                left: '5%',
-                right: '5%',
-                top: '5%',
-                height: showEquity ? '60%' : '85%'
-            }
-        ];
-        
-        const xAxis = [
-            {
-                type: 'category',
-                gridIndex: 0,
-                data: dates,
-                scale: true,
-                boundaryGap: false,
-                axisLine: { onZero: false },
-                splitLine: { show: false },
-                min: 'dataMin',
-                max: 'dataMax'
-            }
-        ];
-
-        const yAxis = [
-            {
-                scale: true,
-                gridIndex: 0,
-                splitArea: { show: true }
-            }
-        ];
-
-        if (showEquity) {
-            grid.push({
-                left: '5%',
-                right: '5%',
-                top: '70%',
-                height: '20%'
-            });
-            xAxis.push({
-                type: 'category',
-                gridIndex: 1,
-                data: dates,
-                axisLabel: { show: false }
-            });
-            yAxis.push({
-                scale: true,
-                gridIndex: 1,
-                splitNumber: 2,
-                axisLabel: { show: true },
-                axisLine: { show: false },
-                axisTick: { show: false },
-                splitLine: { show: false }
-            });
-        }
+        const panels = buildKlineIndicatorPanels(klineObj, equityCurve, data.strategy_info?.params);
+        seriesList.push(...panels.series);
 
         return {
             animation: false,
             title: { text: 'K线图 & 交易信号' },
             legend: {
-                data: legendData,
+                type: 'scroll', top: 32,
+                data: seriesList.map(series => series.name),
                 selected: {
                     'MA20': true,
                     'MA55': true,
@@ -240,7 +170,8 @@ const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
                     'MADKX': true
                 }
             },
-            grid: grid,
+            grid: panels.grid,
+            axisPointer: { link: [{ xAxisIndex: 'all' }] },
             tooltip: {
                 trigger: 'axis',
                 axisPointer: {
@@ -299,18 +230,18 @@ const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
                     return result;
                 }
             },
-            xAxis: xAxis,
-            yAxis: yAxis,
+            xAxis: panels.xAxis,
+            yAxis: panels.yAxis,
             dataZoom: [
                 {
                     type: 'inside',
-                    xAxisIndex: showEquity ? [0, 1] : [0],
+                    xAxisIndex: panels.axisIndices,
                     start: zoomStart,
                     end: 100
                 },
                 {
                     show: true,
-                    xAxisIndex: showEquity ? [0, 1] : [0],
+                    xAxisIndex: panels.axisIndices,
                     type: 'slider',
                     top: '94%',
                     start: zoomStart,
@@ -329,7 +260,7 @@ const ChartPanel = ({ chartType, results, onChartClick, visibleBars }) => {
         <ReactECharts
             key={chartKey}
             option={getOption()}
-            style={{ height: '600px', width: '100%' }}
+            style={{ height: chartType === 'kline' ? '740px' : '600px', width: '100%' }}
             notMerge={true}
             onEvents={onChartClick ? { click: onChartClick } : undefined}
         />

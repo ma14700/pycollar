@@ -75,7 +75,7 @@ export function buildStrategyParameters(strategyType, values) {
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy' || isDirectionalMA55Strategy || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
+      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PointExitStrategy' || isDirectionalMA55Strategy || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
         params = {
             fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
             slow_period: values.slow_period ? parseInt(values.slow_period) : strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
@@ -197,6 +197,13 @@ export function buildStrategyParameters(strategyType, values) {
       }
 
       if (isDirectionalMA55Strategy) params.size_mode = 'fixed';
+      if (strategyType === 'MA20MA55PointExitStrategy') {
+          params.size_mode = 'fixed';
+          for (const [key, fallback, label] of [['take_profit_points',100,'盈利'],['stop_loss_points',50,'亏损']]) {
+              params[key] = Number(values[key] ?? fallback);
+              if (!Number.isFinite(params[key]) || params[key] <= 0) throw new Error(`${label}平仓点数必须大于0`);
+          }
+      }
       params.entry_delay_bars = Number(values.entry_delay_bars);
       params.exit_delay_bars = Number(values.exit_delay_bars);
 

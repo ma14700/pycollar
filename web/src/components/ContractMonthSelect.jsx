@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Select } from 'antd';
 import axios from 'axios';
+import { useBacktest } from '../context/BacktestContext';
+import { filterContractMonthOptions } from '../utils/contractBacktest';
+import ContractMonthLabel from './ContractMonthLabel';
 
 // Shared contract catalog and stale-request protection for analysis pages.
 export default function ContractMonthSelect({ form, symbolsField = 'symbol', disabled = false }) {
+    const { only159Contracts } = useBacktest();
     const market = Form.useWatch('market_type', form) || 'futures';
     const selection = Form.useWatch(symbolsField, form);
     const products = Array.isArray(selection) ? selection : selection ? [selection] : [];
@@ -37,10 +41,10 @@ export default function ContractMonthSelect({ form, symbolsField = 'symbol', dis
 
     if (market !== 'futures') return null;
     return <>
-        <Form.Item name="contract_month" label="具体合约（可多选）" initialValue={[]}
+        <Form.Item name="contract_month" htmlFor={null} label={<ContractMonthLabel />} initialValue={[]}
             extra={!product ? '先选择一个交易品种，再选择具体合约。' : error ? <span style={{ color: '#ff4d4f' }}>{error}<Button type="link" size="small" onClick={() => { cache.current.delete(product); setReload(value => value + 1); }}>重试</Button></span> : '清空后恢复品种行情；选中后使用天勤具体合约数据。'}>
             <Select mode="multiple" showSearch optionFilterProp="label" allowClear maxTagCount="responsive"
-                disabled={!product || disabled} loading={loading} options={options} placeholder="选择具体合约"
+                disabled={!product || disabled} loading={loading} options={filterContractMonthOptions(options, only159Contracts)} placeholder="选择具体合约"
                 notFoundContent={loading ? '加载合约中…' : error ? '合约加载失败' : '暂无可用合约'}
                 onChange={value => { if (value.length) form.setFieldsValue({ data_provider: 'tqsdk', data_source: 'main' }); }} />
         </Form.Item>

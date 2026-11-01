@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets } from '../src/utils/contractBacktest.js';
+import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets, filterContractMonthOptions } from '../src/utils/contractBacktest.js';
 import { buildBacktestSaveRequests } from '../src/utils/backtestSave.js';
+
+test('contract month filter defaults to 01/05/09 and disabling restores the original catalog', () => {
+    const options = ['2601','2603','2605','2609','2610','2701','2702','2705','2709','invalid'].map(value => ({value,label:value}));
+    assert.deepEqual(filterContractMonthOptions(options).map(item=>item.value), ['2601','2605','2609','2701','2705','2709']);
+    assert.equal(filterContractMonthOptions(options,false), options);
+    assert.equal(options.length,10);
+    assert.deepEqual(filterContractMonthOptions([]),[]);
+    assert.deepEqual(filterContractMonthOptions([{value:'2603'}]),[]);
+});
 
 test('2605 and 2701 use the five pre-delivery months through the 23rd', () => {
     assert.deepEqual(contractWindow('2605'), { contract_month: '2605', start_date: '2025-12-01', end_date: '2026-04-23' });

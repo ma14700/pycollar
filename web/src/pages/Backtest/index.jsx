@@ -17,8 +17,11 @@ import { useBacktest } from '../../context/BacktestContext';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
 import { buildBacktestSaveRequests } from '../../utils/backtestSave';
-import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets } from '../../utils/contractBacktest';
+import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets, filterContractMonthOptions } from '../../utils/contractBacktest';
 import BacktestLoading from '../../components/BacktestLoading';
+import ContractMonthLabel from '../../components/ContractMonthLabel';
+import PointExitInputs from '../../components/PointExitInputs';
+import { defaultTradingSymbol } from '../../utils/tradingDefaults';
 import { strategyOptions, strategyParameterKeys, pickStrategyParameters, defaultStrategyParameters, buildStrategyParameters, isFixedMA144Strategy } from '../../utils/backtestStrategies';
 import { getMA144ExitStrategy, ma144ExitStrategyOptions } from '../../utils/ma144ExitStrategies';
 
@@ -29,7 +32,8 @@ const { Option } = Select;
 
 const BacktestPage = () => {
   const { results, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType, selectedStrategies, setSelectedStrategies, strategyConfigs, setStrategyConfigs,
-    loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams } = useBacktest();
+    loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams,
+    only159Contracts } = useBacktest();
   const [form] = Form.useForm();
   const [defaultDateRange] = useState(() => [
     dayjs('2025-01-01'),
@@ -43,6 +47,7 @@ const BacktestPage = () => {
   const isShortMA144Strategy = ['MA20MA144ShortOnlyStrategy', 'MA20MA144CrossExitShortOnlyStrategy'].includes(strategyType);
   const isLongShortMA144Strategy = ['MA20MA144LongShortStrategy', 'MA20MA144CrossExitLongShortStrategy'].includes(strategyType);
   const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(strategyType);
+  const isPointExitStrategy = strategyType === 'MA20MA55PointExitStrategy';
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -160,10 +165,7 @@ const BacktestPage = () => {
     setSymbols(list || []);
     
     if (list && list.length > 0) {
-      let defaultSymbol = list[0];
-      if (marketType === 'futures') {
-        defaultSymbol = list.find(s => s.code === 'SH0') || list[0];
-      }
+      const defaultSymbol = defaultTradingSymbol(list, marketType);
       
       // 默认选中一个，作为数组
       form.setFieldsValue({ 
@@ -425,10 +427,11 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {selectedMarket === 'futures' && <Form.Item name="contract_month" label="具体合约（可多选）"
+                {selectedMarket === 'futures' && <Form.Item name="contract_month" htmlFor={null}
+                    label={<ContractMonthLabel />}
                     extra={!singleProduct ? '先选择一个交易品种，再选择具体合约。' : contractsError ? <span style={{ color: '#ff4d4f' }}>{contractsError} <Button type="link" size="small" onClick={() => { contractCache.current.delete(singleProduct); setContractReload(value => value + 1); }}>重试</Button></span> : '具体合约使用天勤行情；清空后恢复原有品种回测。'}>
                     <Select mode="multiple" maxTagCount="responsive" allowClear showSearch optionFilterProp="label" placeholder="可选择多个合约，如 2605、2701"
-                        disabled={!singleProduct || loading} loading={contractsLoading} options={contractOptions}
+                        disabled={!singleProduct || loading} loading={contractsLoading} options={filterContractMonthOptions(contractOptions, only159Contracts)}
                         notFoundContent={contractsLoading ? '加载合约中…' : contractsError ? '合约加载失败' : '暂无可用合约'}
                         onChange={onContractChange} />
                 </Form.Item>}
@@ -449,7 +452,12 @@ const BacktestPage = () => {
                 <Form.Item label="选择策略（可多选）" required>
                     <Select id="strategy_selection" mode="multiple" showSearch optionFilterProp="label" value={selectedStrategies}
                         options={strategyOptions} disabled={loading} placeholder="至少选择一个策略"
-                        onChange={names => { setSelectedStrategies(names); if (names.length && !names.includes(strategyType)) activateStrategy(names[0]); }} />
+                        onChange={names => {
+                            const added = names.find(name => !selectedStrategies.includes(name));
+                            setSelectedStrategies(names);
+                            if (added) activateStrategy(added);
+                            else if (names.length && !names.includes(strategyType)) activateStrategy(names[0]);
+                        }} />
                 </Form.Item>
                 {selectedStrategies.length > 1 && <Alert type="info" showIcon style={{ marginBottom:16 }}
                     message={`已选 ${selectedStrategies.length} 个策略，将与所选品种或合约逐一组合回测`}
@@ -459,6 +467,11 @@ const BacktestPage = () => {
                         options={strategyOptions.filter(item => selectedStrategies.includes(item.value))} onChange={activateStrategy} />
                 </Form.Item>
 
+                {isPointExitStrategy && <>
+                    <Alert type="info" showIcon style={{ marginBottom: 16 }} message="金叉做多、死叉做空并反手；触及盈利或亏损点数时全仓平仓"
+                        description="点数从实际开仓成交价计算，多空对称；止盈止损平仓后等待新的均线交叉。同根K线同时触及两者时按止损优先模拟。" />
+                    <PointExitInputs />
+                </>}
                 {isDirectionalMA55Strategy && <Alert type="info" showIcon style={{ marginBottom: 16 }}
                     message={strategyType === 'MA20MA55LongOnlyStrategy' ? '金叉开多，死叉平多；不做空' : '死叉开空，金叉平空；不做多'}
                     description="使用固定手数，不加仓、不反手；离场后等待同方向的新交叉信号。默认 MA20 / MA55，按开仓和平仓 K 线设置执行。" />}
@@ -501,7 +514,7 @@ const BacktestPage = () => {
                     1 = 下一根开盘，2 = 第二根开盘，按实际 K 线计数。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
                 </div>
 
-                {isMA144SignalStrategy ? null : isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
+                {isMA144SignalStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -698,7 +711,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {isMA144SignalStrategy || isDirectionalMA55Strategy ? (
+                {isMA144SignalStrategy || isDirectionalMA55Strategy || isPointExitStrategy ? (
                     <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={20} rules={[
                         { required: true, message: '请输入固定手数' },
                         { validator: (_, value) => Number.isInteger(Number(value)) && Number(value) > 0

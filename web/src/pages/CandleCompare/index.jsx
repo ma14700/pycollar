@@ -6,6 +6,7 @@ import axios from 'axios';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
 import ContractMonthSelect from '../../components/ContractMonthSelect';
+import { defaultTradingSymbol } from '../../utils/tradingDefaults';
 import { buildContractComparisons } from '../../utils/contractAnalysis';
 import { buildCandleOption, buildOverlayOption } from '../../utils/candleCompareCharts';
 import { buildFollowingDetails } from '../../utils/candleFollowingDetails';
@@ -56,7 +57,7 @@ const CandleComparePage = () => {
             .then(({ data }) => {
                 const list = data.futures || [];
                 setSymbols(list);
-                form.setFieldValue('symbol', list.find(item => item.code === 'SH0')?.code || list[0]?.code);
+                form.setFieldValue('symbol', defaultTradingSymbol(list)?.code);
             })
             .catch(err => { if (!axios.isCancel(err)) setSymbolError('品种列表加载失败，请刷新页面重试。'); });
         return () => { controller.abort(); request.current?.abort(); };

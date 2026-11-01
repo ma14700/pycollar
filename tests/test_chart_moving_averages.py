@@ -44,3 +44,20 @@ class ChartMovingAverageTests(unittest.TestCase):
         after = self.run_chart(count=240)['ma']
         for key in ['ma20', 'ma55', 'ma144', 'strategy_fast', 'strategy_slow']:
             self.assertEqual(before[key], after[key][:160])
+
+    def test_macd_uses_prior_history_before_aligning_to_visible_dates(self):
+        chart = self.run_chart(start='2025-07-20')
+        close = pd.Series(100 + np.arange(240, dtype=float))
+        dif = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+        dea = dif.ewm(span=9, adjust=False).mean()
+        macd = chart['macd']
+        self.assertEqual(macd['periods'], [12, 26, 9])
+        for key, expected in [('dif', dif), ('dea', dea), ('hist', 2 * (dif-dea))]:
+            np.testing.assert_allclose(macd[key], expected.iloc[200:].to_numpy())
+            self.assertEqual(len(macd[key]), len(chart['dates']))
+        self.assertGreater(macd['dif'][0], 6)
+
+    def test_macd_does_not_change_when_future_bars_are_appended(self):
+        before, after = self.run_chart(count=160)['macd'], self.run_chart(count=240)['macd']
+        for key in ['dif', 'dea', 'hist']:
+            self.assertEqual(before[key], after[key][:160])
