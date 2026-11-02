@@ -8,6 +8,7 @@ from . import strategy
 from .constants import get_multiplier
 from .contract_backtest import contract_scope
 from .execution_delay import SignalDelayBroker, execution_delay_params
+from .daily_macd import align_daily_macd
 from .accounting import (configure_accounting, closed_trade_stats, equity_statistics,
                          AccountEquity, COMMISSION_RATE, METRICS_VERSION)
 
@@ -17,6 +18,10 @@ class StrategyData(bt.feeds.PandasData):
         ('ma_fast', 'ma_fast'),
         ('ma_slow', 'ma_slow'),
     )
+
+class DailyMACDStrategyData(StrategyData):
+    lines = ('daily_dif', 'daily_dea',)
+    params = (('daily_dif', 'daily_dif'), ('daily_dea', 'daily_dea'))
 
 class BacktestEngine:
     def _filter_params(self, StrategyClass, params):
@@ -49,7 +54,7 @@ class BacktestEngine:
             validator(valid_params)
         return valid_params
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None, daily_history_start=None):
         strategy_params = strategy_params.copy()
         contract_info = None
         try:
@@ -496,6 +501,15 @@ class BacktestEngine:
             if len(df_raw) < required_bars:
                 return {"error": f"该策略至少需要 {required_bars} 根已完成 K 线用于均线与交叉确认，当前仅有 {len(df_raw)} 根，请扩大数据范围或更换周期"}
             
+        if strategy_name == 'MA20MA60DailyMACDStrategy' and period != 'daily':
+            try:
+                daily = fetch_data(symbol=symbol, period='daily', market_type=market_type,
+                                   data_provider=data_provider, data_source=data_source, start_date=None,
+                                   end_date=end_date, cache_contract=True)
+                df_raw = align_daily_macd(df_raw, daily, period, market_type, daily_history_start)
+            except Exception as error:
+                return {"error": f"日线MACD过滤数据获取或计算失败: {error}"}
+
         # 转换 timeframe
         if period == 'weekly':
             timeframe = bt.TimeFrame.Weeks
@@ -535,7 +549,8 @@ class BacktestEngine:
             df_raw['ma_slow'] = df_raw['ma_slow'].bfill()
 
         # 使用自定义 DataFeed
-        data = StrategyData(dataname=df_raw, timeframe=timeframe, compression=compression)
+        FeedClass = DailyMACDStrategyData if 'daily_dif' in df_raw else StrategyData
+        data = FeedClass(dataname=df_raw, timeframe=timeframe, compression=compression)
         cerebro.adddata(data)
         
         # 2. 添加策略
@@ -772,6 +787,16 @@ class BacktestEngine:
             print(f"MACD Calculation Error: {e}")
             kline_data['macd'] = None
 
+        if strategy_name == 'MA20MA60DailyMACDStrategy':
+            # Display the exact seeded EMA values used for signal decisions,
+            # including history preceding the visible window; no warmup zeros.
+            actual_dif = pd.Series(list(strat.daily_dif.array), index=df_raw.index).reindex(df_kline.index)
+            actual_dea = pd.Series(list(strat.daily_dea.array), index=df_raw.index).reindex(df_kline.index)
+            kline_data['macd'] = {
+                key: [float(value) if pd.notna(value) else None for value in series]
+                for key, series in [('dif', actual_dif), ('dea', actual_dea), ('hist', 2 * (actual_dif - actual_dea))]
+            }
+
         if strategy_name in ['DKXStrategy', 'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy']:
             try:
                 dkx_period = int(strategy_params.get('dkx_period', 20))
@@ -875,7 +900,7 @@ class BacktestEngine:
 
     def analyze_detail(self, symbol, period, strategy_params, strategy_name='TrendFollowingStrategy',
                        market_type='futures', data_provider='akshare', data_source='main',
-                       start_date=None, as_of=None, history_start=None):
+                       start_date=None, as_of=None, history_start=None, daily_history_start=None):
         """Use the backtest executor without liquidating a live strategy at the data boundary."""
         params = strategy_params.copy()
         params['disable_auto_close'] = True
@@ -887,7 +912,7 @@ class BacktestEngine:
         result = self.run(symbol=symbol, period=period, strategy_params=params,
                           initial_cash=10000000.0, start_date=start_date,
                           strategy_name=strategy_name, market_type=market_type,
-                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start)
+                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start, daily_history_start=daily_history_start)
         if 'error' not in result:
             result['analysis_request'] = {
                 'symbol': symbol, 'period': period, 'market_type': market_type,
@@ -896,6 +921,7 @@ class BacktestEngine:
                 'data_provider': data_provider, 'data_source': data_source,
                 'start_date': start_date, 'as_of': result['data_info']['end'],
                 'history_start': result['execution_info']['history_start'],
+                **({'daily_history_start': result['data_info']['daily_macd_history_start']} if result['data_info'].get('daily_macd_history_start') else {}),
             }
         return result
 

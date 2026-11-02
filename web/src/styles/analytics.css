@@ -43,6 +43,18 @@
 .analysis-detail-title h2 { margin: 0; font-size: 21px; }
 .analysis-detail-tabs > .ant-tabs-nav { margin-bottom: 20px; }
 .analysis-stack { display: flex; flex-direction: column; gap: 20px; }
+.batch-analysis-modal .analysis-stack > * { min-width: 0; }
+.batch-analysis-group-select { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.batch-analysis-details { width: 100%; min-width: 0; }
+.batch-analysis-details .ant-table-wrapper { min-width: 0; max-width: 100%; }
+.batch-analysis-details .ant-table-body { overflow-x: auto !important; scrollbar-width: auto; scrollbar-color: #94a3b8 #edf2f7; }
+.batch-analysis-details .ant-table-body::-webkit-scrollbar { width: 12px; height: 12px; }
+.batch-analysis-details .ant-table-body::-webkit-scrollbar-track { background: #edf2f7; }
+.batch-analysis-details .ant-table-body::-webkit-scrollbar-thumb { background: #94a3b8; border: 2px solid #edf2f7; border-radius: 6px; }
+@media (max-width: 600px) {
+  .batch-analysis-details .ant-card-head-wrapper { flex-wrap: wrap; gap: 8px; padding-block: 8px; }
+  .batch-analysis-details .ant-card-extra { margin-inline-start: auto; }
+}
 .analysis-record-title { border: 0; background: none; padding: 0; color: #2563eb; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
 .analysis-record-title:hover { color: #1748b7; text-decoration: underline; }
 .analysis-win-rate { display: flex; align-items: center; gap: 8px; min-width: 92px; }

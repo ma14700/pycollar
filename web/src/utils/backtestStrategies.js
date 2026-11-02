@@ -22,7 +22,10 @@ export function buildStrategyParameters(strategyType, values) {
       const marginRate = values.margin_rate !== undefined ? parseFloat(values.margin_rate) : 0.1;
 
       // Strategy params construction logic
-      if (strategyType === 'TrendFollowingStrategy') {
+      if (strategyType === 'MA20MA60DailyMACDStrategy') {
+        params = {fast_period:20, slow_period:60, size_mode:'fixed', fixed_size:Number(values.fixed_size || 20),
+            contract_multiplier:contractMultiplier, margin_rate:marginRate};
+      } else if (strategyType === 'TrendFollowingStrategy') {
         params = {
           fast_period: parseInt(values.fast_period),
           slow_period: parseInt(values.slow_period),

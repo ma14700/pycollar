@@ -588,6 +588,7 @@ class StrategyDetailRequest(BaseModel):
     start_date: Optional[str] = None
     as_of: Optional[str] = None
     history_start: Optional[str] = None
+    daily_history_start: Optional[str] = None
 
 
 @app.post('/api/strategy/detail')

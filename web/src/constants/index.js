@@ -7,6 +7,7 @@ export const strategyNameMap = {
   'MA20MA55CrossoverStrategy': '20/55双均线交叉(多空)',
   'MA20MA55PointExitStrategy': '20/55双均线交叉(多空平仓点数)',
   'MA20MA60CrossoverStrategy': '20/60双均线交叉(多空)',
+  'MA20MA60DailyMACDStrategy': '20/60交叉＋日线MACD过滤（多空）',
   'MA5MA20CrossoverStrategy': '5/20双均线交叉(多空)',
   'MA5MA55CrossoverStrategy': '5/55均线交叉(多空)',
   'DualMAFixedTPSLStrategy': '20/55双均线+固定止盈止损',

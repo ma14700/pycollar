@@ -418,6 +418,47 @@ class MA20MA144CrossExitLongShortStrategy(MA20MA144LongShortStrategy):
             self.order = self.order_target_size(target=-self.p.fixed_size)
 
 
+class MA20MA60DailyMACDStrategy(BaseStrategy):
+    """Selected-period SMA20/60 cross entries filtered by completed daily MACD."""
+    params = (('fast_period', 20), ('slow_period', 60))
+
+    @classmethod
+    def required_bars(cls, params):
+        return max(int(params.get('fast_period', 20)) + 1, int(params.get('slow_period', 60)) + 1, 34)
+
+    def __init__(self):
+        super().__init__()
+        self.ma_fast = bt.ind.SMA(self.data.close, period=self.p.fast_period)
+        self.ma_slow = bt.ind.SMA(self.data.close, period=self.p.slow_period)
+        self.crossover = bt.ind.CrossOver(self.ma_fast, self.ma_slow)
+        if hasattr(self.data.lines, 'daily_dif'):
+            self.daily_dif, self.daily_dea = self.data.daily_dif, self.data.daily_dea
+        else:
+            if self.data._timeframe != bt.TimeFrame.Days:
+                raise ValueError('当前周期未加载独立日线MACD，禁止用当前周期MACD替代')
+            self.macd = bt.ind.MACD(self.data.close, period_me1=12, period_me2=26, period_signal=9)
+            self.daily_dif, self.daily_dea = self.macd.macd, self.macd.signal
+
+    def next(self):
+        if not self.pre_next() or self.order:
+            return
+        cross = self.crossover[0]
+        if not cross:
+            return
+        bias = self.daily_dif[0] - self.daily_dea[0]
+        direction = 1 if cross > 0 else -1
+        allowed = bias > 0 if direction > 0 else bias < 0
+        if allowed:
+            if self.position.size * direction <= 0:
+                self.log(f'入场信号: 当前周期MA20/60{"金叉做多" if direction > 0 else "死叉做空"}，日线MACD DIF{"大于" if direction > 0 else "小于"}DEA')
+                self.order = self.order_target_size(target=direction * self.p.fixed_size)
+        else:
+            self.log('均线交叉信号: 日线MACD方向不符或预热不足，不开仓；等待新的MA20/60交叉')
+            if self.position.size * direction < 0:
+                self.log('离场信号: 20/60反向交叉，先平掉原方向持仓')
+                self.order = self.close()
+
+
 class DualMAFixedTPSLStrategy(BaseStrategy):
     """
     20/55双均线交叉(多空) + 固定止盈止损策略

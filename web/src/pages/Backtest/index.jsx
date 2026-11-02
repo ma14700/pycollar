@@ -48,6 +48,7 @@ const BacktestPage = () => {
   const isLongShortMA144Strategy = ['MA20MA144LongShortStrategy', 'MA20MA144CrossExitLongShortStrategy'].includes(strategyType);
   const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(strategyType);
   const isPointExitStrategy = strategyType === 'MA20MA55PointExitStrategy';
+  const isDailyMACDStrategy = strategyType === 'MA20MA60DailyMACDStrategy';
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -291,7 +292,7 @@ const BacktestPage = () => {
                   data_source: values.data_source || 'main',
                   data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
                   strategy_name: name, strategy_params: { ...params, contract_multiplier: symbolObj?.multiplier || values.contract_multiplier || 1 },
-                  initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) ? false : autoOptimize,
+                  initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) || name === 'MA20MA60DailyMACDStrategy' ? false : autoOptimize,
               };
               if (values.date_range?.length === 2) {
                   payload.start_date = values.date_range[0].format('YYYY-MM-DD');
@@ -472,6 +473,9 @@ const BacktestPage = () => {
                         description="点数从实际开仓成交价计算，多空对称；止盈止损平仓后等待新的均线交叉。同根K线同时触及两者时按止损优先模拟。" />
                     <PointExitInputs />
                 </>}
+                {isDailyMACDStrategy && <Alert type="info" showIcon style={{marginBottom:16}}
+                    message="当前周期20/60交叉＋日线MACD过滤"
+                    description="均线按所选周期计算：例如60分钟周期使用20根与60根小时K线均线。上穿且已完成日线MACD的DIF>DEA时做多，下穿且DIF<DEA时做空；MACD独立取同合约日线，采用12/26/9，只使用信号确认时已完成的日线；判断金叉或死叉状态，不要求MACD在同一天交叉，也不要求在零轴上方或下方。反向均线交叉先离场，仅MACD同向才反手；未通过过滤的信号不会补开，等待新的均线交叉。收盘确认，按开平仓K线配置执行。" />}
                 {isDirectionalMA55Strategy && <Alert type="info" showIcon style={{ marginBottom: 16 }}
                     message={strategyType === 'MA20MA55LongOnlyStrategy' ? '金叉开多，死叉平多；不做空' : '死叉开空，金叉平空；不做多'}
                     description="使用固定手数，不加仓、不反手；离场后等待同方向的新交叉信号。默认 MA20 / MA55，按开仓和平仓 K 线设置执行。" />}
@@ -514,7 +518,7 @@ const BacktestPage = () => {
                     1 = 下一根开盘，2 = 第二根开盘，按实际 K 线计数。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
                 </div>
 
-                {isMA144SignalStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
+                {isMA144SignalStrategy || isDailyMACDStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -700,7 +704,7 @@ const BacktestPage = () => {
                 >
                     {({ getFieldValue }) => {
                         const sizeMode = getFieldValue('size_mode');
-                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy && !isDirectionalMA55Strategy) {
+                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy && !isDirectionalMA55Strategy && !isDailyMACDStrategy) {
                             return (
                                 <Form.Item name="atr_multiplier" label="ATR止损倍数">
                                     <Input type="number" step="0.1" />
@@ -711,7 +715,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {isMA144SignalStrategy || isDirectionalMA55Strategy || isPointExitStrategy ? (
+                {isMA144SignalStrategy || isDirectionalMA55Strategy || isPointExitStrategy || isDailyMACDStrategy ? (
                     <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={20} rules={[
                         { required: true, message: '请输入固定手数' },
                         { validator: (_, value) => Number.isInteger(Number(value)) && Number(value) > 0
@@ -784,7 +788,7 @@ const BacktestPage = () => {
                 {strategyType !== 'MA20MA55RiskRewardStrategy' && <Form.Item name="atr_period" hidden><Input /></Form.Item>}
 
                 <Form.Item label="自动优化 (若收益<20%)" tooltip="当回测年化收益率低于20%时，系统会自动尝试优化参数以寻找更好的结果。">
-                    <Switch checked={autoOptimize} onChange={setAutoOptimize} disabled={isMA144SignalStrategy} />
+                    <Switch checked={autoOptimize} onChange={setAutoOptimize} disabled={isMA144SignalStrategy || isDailyMACDStrategy} />
                 </Form.Item>
 
                 <Form.Item>

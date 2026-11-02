@@ -42,6 +42,12 @@ test('per-strategy drafts preserve explicit booleans and ignore common dates and
     assert.equal(defaultStrategyParameters('MA20MA144LongOnlyStrategy').fast_period,20);
 });
 
+test('daily MACD strategy keeps the requested 20/60 periods and common execution delays',()=>{
+    const params=buildStrategyParameters('MA20MA60DailyMACDStrategy',{fast_period:5,slow_period:55,fixed_size:3,margin_rate:.12,entry_delay_bars:2,exit_delay_bars:3});
+    assert.equal(params.fast_period,20);assert.equal(params.slow_period,60);assert.equal(params.size_mode,'fixed');
+    assert.equal(params.fixed_size,3);assert.equal(params.entry_delay_bars,2);assert.equal(params.exit_delay_bars,3);
+});
+
 test('same-symbol different-strategy queue preserves identities, failures and save payloads', async () => {
     const names=['MA20MA144LongOnlyStrategy','MA20MA144ShortOnlyStrategy'];
     const tasks=['JM2701','JM2605'].flatMap(symbol=>names.map(strategy_name=>({payload:{symbol,strategy_name,
