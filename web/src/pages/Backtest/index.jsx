@@ -35,11 +35,20 @@ const BacktestPage = () => {
     loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams,
     only159Contracts } = useBacktest();
   const [form] = Form.useForm();
+  const pageRef = useRef(null);
+  const configRef = useRef(null);
+  const resultsRef = useRef(null);
+  useEffect(() => {
+    if (!loading) return;
+    pageRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    configRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+    resultsRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [loading]);
   const [defaultDateRange] = useState(() => [
     dayjs('2025-01-01'),
     dayjs(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })),
   ]);
-  const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA55BreakoutStrategy');
+  const [strategyType, setStrategyType] = useState(savedStrategyType || 'MA20MA55CrossoverStrategy');
   const ma144ExitStrategy = getMA144ExitStrategy(strategyType);
   const isMA144ReversalStrategy = Boolean(ma144ExitStrategy?.reverses);
   const ma144ExitPeriod = ma144ExitStrategy ? 144 : 55;
@@ -104,8 +113,8 @@ const BacktestPage = () => {
         const marketType = savedFormValues.market_type || 'futures';
         const initialValues = { ...savedFormValues,
             date_range: savedFormValues.date_range === undefined ? defaultDateRange : savedFormValues.date_range,
-            entry_delay_bars: savedFormValues.entry_delay_bars ?? 1,
-            exit_delay_bars: savedFormValues.exit_delay_bars ?? 1,
+            entry_delay_bars: savedFormValues.entry_delay_bars ?? 0,
+            exit_delay_bars: savedFormValues.exit_delay_bars ?? 0,
             data_provider: savedFormValues.data_provider || (marketType === 'stock' ? 'akshare' : 'tqsdk') };
         if (initialValues.symbol && !Array.isArray(initialValues.symbol)) initialValues.symbol = [initialValues.symbol];
         initialValues.contract_month = marketType === 'futures' ? normalizeContractMonths(initialValues.contract_month) : [];
@@ -117,7 +126,7 @@ const BacktestPage = () => {
         }
         form.setFieldsValue(initialValues);
     } else {
-        form.setFieldsValue({ market_type: 'futures', period: 'daily', initial_cash: 1000000 });
+        form.setFieldsValue({ market_type: 'futures', period: '60', initial_cash: 1000000 });
     }
     const fetchData = async () => {
       try {
@@ -338,10 +347,10 @@ const BacktestPage = () => {
   };
 
   return (
-    <div style={{ height: '100%', padding: '24px' }}>
+    <div ref={pageRef} style={{ height: '100%', padding: '24px' }}>
         <Row gutter={24} style={{ height: '100%' }}>
             <Col span={isFullScreen ? 0 : 6} style={{ display: isFullScreen ? 'none' : 'block' }}>
-            <Card title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
+            <Card ref={configRef} title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
                 <Form form={form} layout="vertical" onFinish={onFinish} 
                     onValuesChange={(changedValues, allValues) => {
                         setSavedFormValues(allValues);
@@ -350,12 +359,12 @@ const BacktestPage = () => {
                     initialValues={{
                     market_type: 'futures',
                     initial_cash: 1000000,
-                    period: 'daily',
+                    period: '60',
                     date_range: defaultDateRange,
-                    entry_delay_bars: 1,
-                    exit_delay_bars: 1,
-                    fast_period: 10,
-                    slow_period: 20,
+                    entry_delay_bars: 0,
+                    exit_delay_bars: 0,
+                    fast_period: 20,
+                    slow_period: 55,
                     atr_period: 14,
                     atr_multiplier: 2.0,
                     risk_per_trade: 0.02,
@@ -505,17 +514,17 @@ const BacktestPage = () => {
                 <Row gutter={12}>
                     {[['entry_delay_bars', '开仓 K 线'], ['exit_delay_bars', '平仓 K 线']].map(([name, label]) => (
                         <Col span={12} key={name}>
-                            <Form.Item name={name} label={label} tooltip="信号确认后，第几根 K 线的开盘价成交。1 为下一根，2 为第二根。" rules={[
+                            <Form.Item name={name} label={label} tooltip="0 为不额外延迟，在下一根开盘成交；1 也沿用下一根开盘，2 为第二根。" rules={[
                                 { required: true, message: '请输入 K 线根数' },
-                                { validator: (_, value) => value == null || (Number.isInteger(value) && value >= 1) ? Promise.resolve() : Promise.reject(new Error('须为大于等于 1 的整数')) },
+                                { validator: (_, value) => value == null || (Number.isInteger(value) && value >= 0) ? Promise.resolve() : Promise.reject(new Error('须为大于等于 0 的整数')) },
                             ]}>
-                                <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+                                <InputNumber min={0} precision={0} style={{ width: '100%' }} />
                             </Form.Item>
                         </Col>
                     ))}
                 </Row>
                 <div style={{ color: '#8b96a8', fontSize: 12, lineHeight: 1.7, marginTop: -8, marginBottom: 20 }}>
-                    1 = 下一根开盘，2 = 第二根开盘，按实际 K 线计数。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
+                    默认 0 = 不额外延迟，下一根开盘成交；1 沿用下一根开盘，2 = 第二根开盘。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
                 </div>
 
                 {isMA144SignalStrategy || isDailyMACDStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
@@ -830,7 +839,7 @@ const BacktestPage = () => {
             </Card>
             </Col>
             
-            <Col span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
+            <Col ref={resultsRef} span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
             {loading && activeRun ? <BacktestLoading run={activeRun} /> : runError ? (
                 <Alert type="error" showIcon message="回测失败" description={runError} />
             ) : results ? (

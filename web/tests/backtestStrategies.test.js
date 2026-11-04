@@ -1,5 +1,14 @@
 import test from 'node:test';
 
+test('execution controls default to zero and preserve explicitly saved positive offsets',()=>{
+    const name='MA20MA55CrossoverStrategy';
+    const defaults=defaultStrategyParameters(name);
+    const params=buildStrategyParameters(name,defaults);
+    assert.equal(params.entry_delay_bars,0); assert.equal(params.exit_delay_bars,0);
+    const saved=buildStrategyParameters(name,{...defaults,entry_delay_bars:2,exit_delay_bars:3});
+    assert.equal(saved.entry_delay_bars,2); assert.equal(saved.exit_delay_bars,3);
+});
+
 test('20/55 point exits have independent positive profit/loss distances and fixed sizing',()=>{
     const name='MA20MA55PointExitStrategy';
     const defaults=defaultStrategyParameters(name);

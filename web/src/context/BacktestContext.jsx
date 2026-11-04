@@ -11,8 +11,8 @@ export const BacktestProvider = ({ children }) => {
   const taskState = useSyncExternalStore(task.subscribe, task.getSnapshot);
   const [symbols, setSymbols] = useState([]);
   const [savedFormValues, setSavedFormValues] = useState(null);
-  const [savedStrategyType, setSavedStrategyType] = useState('MA55BreakoutStrategy');
-  const [selectedStrategies, setSelectedStrategies] = useState(['MA55BreakoutStrategy']);
+  const [savedStrategyType, setSavedStrategyType] = useState('MA20MA55CrossoverStrategy');
+  const [selectedStrategies, setSelectedStrategies] = useState(['MA20MA55CrossoverStrategy']);
   const [strategyConfigs, setStrategyConfigs] = useState({});
   const [autoOptimize, setAutoOptimize] = useState(false);
   const [currentParams, setCurrentParams] = useState(null);

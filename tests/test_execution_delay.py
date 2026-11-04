@@ -55,6 +55,23 @@ def simulate(signals, entry=1, exit=1, data=None, auto_close=False, legacy=False
 
 
 class ExecutionDelayTests(unittest.TestCase):
+    def test_zero_is_default_and_preserves_next_open_execution_in_both_directions(self):
+        self.assertEqual(execution_delay_params({}), {'entry_delay_bars': 0, 'exit_delay_bars': 0})
+        for signals in ({1: 'buy', 6: 'close'}, {1: 'sell', 6: 'close'}, {1: 'buy', 6: 'reverse'}):
+            zero, one = simulate(signals,entry=0,exit=0), simulate(signals,entry=1,exit=1)
+            self.assertEqual([fill[:3] for fill in zero.fills], [fill[:3] for fill in one.fills])
+            self.assertEqual(zero.fills[0][3]['configured_delay_bars'], 0)
+            self.assertEqual(zero.fills[0][3]['execution_delay_bars'], 1)
+
+    def test_zero_mixes_with_positive_delays_without_changing_reversal_or_forced_close(self):
+        result = simulate({1: 'buy', 6: 'reverse'}, entry=0, exit=4)
+        self.assertEqual([fill[:2] for fill in result.fills], [(2, 2), (10, -4)])
+        result = simulate({1:'buy', 6:'close'},entry=3,exit=0)
+        self.assertEqual([fill[:2] for fill in result.fills],[(4,2),(7,-2)])
+        forced = simulate({1:'sell'},entry=0,exit=0,auto_close=True)
+        self.assertEqual(forced.position.size,0)
+        self.assertEqual(forced.fills[-1][3]['execution_kind'],'forced_exit')
+
     def test_default_one_preserves_legacy_next_open_prices(self):
         signals = {1: 'buy', 6: 'close'}
         current, legacy = simulate(signals), simulate(signals, legacy=True)
@@ -109,12 +126,12 @@ class ExecutionDelayTests(unittest.TestCase):
         self.assertEqual(stop.fills[0][:3], (2, 2, 105))
 
     def test_invalid_delays_fail_before_loading_market_data(self):
-        for value in [0, -1, 1.5, True, None, '', '2.0', 'bad']:
+        for value in [-1, 1.5, True, None, '', '2.0', 'bad']:
             with self.subTest(value=value), patch.object(engine, 'fetch_data') as fetch:
                 result = engine.BacktestEngine().run('RB0', 'daily', {'entry_delay_bars': value})
-                self.assertIn('大于等于 1', result['error'])
+                self.assertIn('大于等于 0', result['error'])
                 fetch.assert_not_called()
-        self.assertEqual(execution_delay_params({}), {'entry_delay_bars': 1, 'exit_delay_bars': 1})
+        self.assertEqual(execution_delay_params({}), {'entry_delay_bars': 0, 'exit_delay_bars': 0})
 
     def test_ma20_144_engine_fills_at_configured_bars_and_records_signal_time(self):
         prices = np.concatenate([np.linspace(160, 80, 230), np.linspace(80, 180, 140),

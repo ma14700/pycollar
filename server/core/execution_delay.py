@@ -7,15 +7,15 @@ import backtrader as bt
 def execution_delay_params(params):
     result = {}
     for key, label in [('entry_delay_bars', '开仓 K 线'), ('exit_delay_bars', '平仓 K 线')]:
-        value = params.get(key, 1)
-        if isinstance(value, bool) or not re.fullmatch(r'[1-9]\d*', str(value)):
-            raise ValueError(f'{label}必须为大于等于 1 的整数，1 表示下一根开盘成交')
+        value = params.get(key, 0)
+        if isinstance(value, bool) or not re.fullmatch(r'0|[1-9]\d*', str(value)):
+            raise ValueError(f'{label}必须为大于等于 0 的整数，0 表示不额外延迟，在下一根开盘成交')
         result[key] = int(value)
     return result
 
 
 class SignalDelayBroker(bt.brokers.BackBroker):
-    params = (('entry_delay_bars', 1), ('exit_delay_bars', 1))
+    params = (('entry_delay_bars', 0), ('exit_delay_bars', 0))
 
     def submit(self, order, check=True):
         position = self.getposition(order.data).size
@@ -33,8 +33,12 @@ class SignalDelayBroker(bt.brokers.BackBroker):
                 delay = max(self.p.entry_delay_bars, self.p.exit_delay_bars) if reversing else self.p.exit_delay_bars
             else:
                 kind, delay = 'entry', self.p.entry_delay_bars
+            # Zero opts out of extra waiting. A close-confirmed signal still
+            # executes at the next available open; existing positive offsets keep their meaning.
+            configured_delay = delay
+            delay = max(1, delay)
             order.addinfo(signal_bar=len(order.data), execution_bar=len(order.data) + delay,
-                          execution_delay_bars=delay, execution_kind=kind,
+                          execution_delay_bars=delay, configured_delay_bars=configured_delay, execution_kind=kind,
                           signal_time=order.data.datetime.datetime(0).isoformat(sep=' '))
             if delay > 1:
                 label = {'entry': '开仓', 'exit': '平仓', 'reversal': '反手'}[kind]

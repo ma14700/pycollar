@@ -207,8 +207,8 @@ export function buildStrategyParameters(strategyType, values) {
               if (!Number.isFinite(params[key]) || params[key] <= 0) throw new Error(`${label}平仓点数必须大于0`);
           }
       }
-      params.entry_delay_bars = Number(values.entry_delay_bars);
-      params.exit_delay_bars = Number(values.exit_delay_bars);
+      params.entry_delay_bars = Number(values.entry_delay_bars ?? 0);
+      params.exit_delay_bars = Number(values.exit_delay_bars ?? 0);
 
       params.margin_rate = marginRate;
       return params;
