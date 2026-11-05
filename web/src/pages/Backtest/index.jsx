@@ -40,7 +40,7 @@ const BacktestPage = () => {
   const resultsRef = useRef(null);
   useEffect(() => {
     if (!loading) return;
-    pageRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    pageRef.current?.parentElement?.scrollTo({ top: 0, behavior: 'instant' });
     configRef.current?.scrollTo({ top: 0, behavior: 'instant' });
     resultsRef.current?.scrollTo({ top: 0, behavior: 'instant' });
   }, [loading]);
@@ -347,9 +347,9 @@ const BacktestPage = () => {
   };
 
   return (
-    <div ref={pageRef} style={{ height: '100%', padding: '24px' }}>
-        <Row gutter={24} style={{ height: '100%' }}>
-            <Col span={isFullScreen ? 0 : 6} style={{ display: isFullScreen ? 'none' : 'block' }}>
+    <div ref={pageRef} className="backtest-page" style={{ height: '100%', minHeight: 0, boxSizing: 'border-box', padding: '24px', overflow: 'hidden' }}>
+        <Row gutter={24} style={{ height: '100%', minHeight: 0 }}>
+            <Col span={isFullScreen ? 0 : 6} style={{ height: '100%', minHeight: 0, minWidth: 0, display: isFullScreen ? 'none' : 'block' }}>
             <Card ref={configRef} title={<span><SafetyCertificateOutlined /> 策略配置</span>} variant="borderless" style={{ height: '100%', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
                 <Form form={form} layout="vertical" onFinish={onFinish} 
                     onValuesChange={(changedValues, allValues) => {
@@ -839,7 +839,7 @@ const BacktestPage = () => {
             </Card>
             </Col>
             
-            <Col ref={resultsRef} span={isFullScreen ? 24 : 18} style={{ height: '100%', overflowY: 'auto' }}>
+            <Col ref={resultsRef} role="region" aria-label="策略回测结果" tabIndex={0} span={isFullScreen ? 24 : 18} style={{ height: '100%', minHeight: 0, minWidth: 0, overflow: 'auto' }}>
             {loading && activeRun ? <BacktestLoading run={activeRun} /> : runError ? (
                 <Alert type="error" showIcon message="回测失败" description={runError} />
             ) : results ? (
