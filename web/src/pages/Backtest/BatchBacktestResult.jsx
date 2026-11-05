@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Drawer, Empty, Input, Select, Tag, Tooltip } from 'antd';
+import { Button, Drawer, Empty, Grid, Input, Select, Tag, Tooltip } from 'antd';
 import { BarChartOutlined, CheckCircleOutlined, CloseCircleOutlined, FullscreenOutlined, FullscreenExitOutlined, LineChartOutlined, SearchOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import SingleBacktestResult from './SingleBacktestResult';
@@ -24,6 +24,7 @@ function ReportChart({ height = 230, ...props }) {
 }
 
 export default function BatchBacktestResult({ results, symbols = [], isFullScreen, onToggleFullScreen }) {
+    const screens = Grid.useBreakpoint();
     const rows = useMemo(()=>batchReportRows(results?.items || []),[results?.items]);
     const [analysisOpen,setAnalysisOpen] = useState(false);
     const [detailKey,setDetailKey] = useState(null);
@@ -93,6 +94,6 @@ export default function BatchBacktestResult({ results, symbols = [], isFullScree
         })}</div>:<Empty description="当前筛选条件下没有结果"/>}
         <div className="batch-report-note">各合约与策略为独立回测，收益不相加；权益小图按每条结果独立缩放，具体时间与价格请查看详情。</div>
         {analysisOpen&&<BatchBacktestAnalysis items={results.items} onClose={()=>setAnalysisOpen(false)}/>}
-        <Drawer title={detail?`${detail.symbol} · ${strategyName(detail.strategy)}`:'回测详情'} width="min(1080px, 100vw)" open={Boolean(detail)} onClose={()=>setDetailKey(null)} destroyOnClose>{detail?.data&&<SingleBacktestResult results={detail.data}/>}</Drawer>
+        <Drawer title={detail?`${detail.symbol} · ${strategyName(detail.strategy)}`:'回测详情'} width={screens.md?'70vw':'100vw'} open={Boolean(detail)} onClose={()=>setDetailKey(null)} destroyOnClose>{detail?.data&&<SingleBacktestResult results={detail.data}/>}</Drawer>
     </section>;
 }
