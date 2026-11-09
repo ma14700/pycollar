@@ -130,7 +130,7 @@ class ContractBacktestTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['contract_month'], '2605')
         self.assertEqual(run.call_args.args[0], 'JM2605')
 
-    def test_api_saves_actual_contract_and_ignores_manually_supplied_dates(self):
+    def test_api_uses_actual_contract_and_ignores_manually_supplied_dates(self):
         from server import main as api
         metrics = dict(initial_cash=10000, final_value=10100, net_profit=100,
                        sharpe_ratio=0, max_drawdown=0, total_trades=1, win_rate=100)
@@ -140,12 +140,12 @@ class ContractBacktestTests(unittest.TestCase):
             start_date='2020-01-01', end_date='2030-01-01')
         with patch.object(api, 'BacktestEngine') as cls, contextlib.redirect_stdout(io.StringIO()):
             cls.return_value.run.return_value = {'metrics': metrics}
-            api.run_backtest(request, db)
+            api.run_backtest(request)
         kwargs = cls.return_value.run.call_args.kwargs
         self.assertEqual(kwargs['symbol'], 'JM2605')
         self.assertEqual(kwargs['start_date'], '2025-12-01')
         self.assertEqual(kwargs['end_date'], '2026-04-23')
-        self.assertEqual(db.add.call_args.args[0].symbol, 'JM2605')
+        db.add.assert_not_called()
 
     def test_worker_identifies_complete_history_from_bar_ids(self):
         api = MagicMock()

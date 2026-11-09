@@ -15,6 +15,7 @@ export const tomorrowStrategyOptions = [
     { value: 'MA5MA20CrossoverStrategy', label: '5/20双均线交叉(多空)', defaults: { fast_period: 5, slow_period: 20 } },
     { value: 'MA5MA55CrossoverStrategy', label: '5/55均线交叉(多空)', defaults: { fast_period: 5, slow_period: 55, allow_reverse: true } },
     { value: 'MA20MA55RiskRewardStrategy', label: '20/55双均线+盈亏比', defaults: { fast_period: 20, slow_period: 55, risk_reward_ratio: 2, atr_period: 14, atr_multiplier: 2 } },
+    { value: 'MA20MA55RR3Strategy', label: '20/55多空＋ATR止损（目标亏1赚3）', defaults: { fast_period: 20, slow_period: 55, risk_reward_ratio: 3, atr_period: 14, atr_multiplier: 2, exit_on_opposite_cross: false } },
     { value: 'StockMA20MA55LongOnlyStrategy', label: '20/55双均线多头(股票)', defaults: { fast_period: 20, slow_period: 55 } },
     { value: 'MA20MA55PartialTakeProfitStrategy', label: '20/55双均线+盈利平半仓', defaults: { fast_period: 20, slow_period: 55, take_profit_points: 50 } },
     { value: 'DualMAFixedTPSLStrategy', label: '20/55双均线+固定止盈止损', defaults: { fast_period: 20, slow_period: 55, ma_type: 'SMA', sl_mode: 'points', sl_value: 50, tp_mode: 'points', tp_value: 100 } },

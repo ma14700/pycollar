@@ -1,7 +1,8 @@
+import { loadHistoryRecords } from '../../utils/historyRecords';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Alert, Button, Card, DatePicker, Descriptions, Empty, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs, Tag, Tooltip, message } from 'antd';
 import { ReloadOutlined, HistoryOutlined, DeleteOutlined, ArrowLeftOutlined, LineChartOutlined, SearchOutlined, TrophyOutlined, RiseOutlined, FundOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import { strategyNameMap, periodMap } from '../../constants';
 import { getSymbolLabel } from '../../utils';
 import MetricsPanel from '../../components/MetricsPanel';
@@ -32,23 +33,27 @@ export default function HistoryPage() {
     const [comparisons, setComparisons] = useState([]);
     const [compareError, setCompareError] = useState('');
     const detailRequest = useRef(null);
+    const listRequest = useRef(null);
     const detailResults = useMemo(() => viewing?.detail_data ? {
         ...viewing.detail_data, data_info: { ...viewing.detail_data.data_info, symbol: viewing.detail_data.data_info?.symbol || viewing.symbol },
         backtest_request: { strategy_name:viewing.strategy_name, ...viewing.detail_data.backtest_request },
     } : null, [viewing]);
 
     const loadRecords = async () => {
+        listRequest.current?.abort();
+        const controller = new AbortController(); listRequest.current = controller;
         setLoading(true); setError('');
         try {
-            const { data } = await axios.get('http://localhost:8000/api/backtest/list');
+            const data = await loadHistoryRecords(axios.get, controller.signal);
+            if (controller.signal.aborted) return;
             setRecords((Array.isArray(data) ? data : []).map(record => normalizeHistoryRecord({ ...record,
                 strategyLabel: strategyNameMap[record.strategy_name] || record.strategy_name,
                 symbolLabel: getSymbolLabel(record.symbol),
             })));
-        } catch { setError('获取回测记录失败，请检查后端连接后重试。'); }
-        finally { setLoading(false); }
+        } catch { if (!controller.signal.aborted) setError('获取回测记录失败，请检查后端连接后重试。'); }
+        finally { if (!controller.signal.aborted) setLoading(false); }
     };
-    useEffect(() => { loadRecords(); return () => detailRequest.current?.abort(); }, []);
+    useEffect(() => { loadRecords(); return () => { detailRequest.current?.abort(); listRequest.current?.abort(); }; }, []);
     const filtered = useMemo(() => filterHistoryRecords(records, filters), [records, filters]);
     const summary = useMemo(() => summarizeHistory(filtered), [filtered]);
     const ranked = useMemo(() => filtered.filter(record => record.returnPct !== null).sort((a, b) => b.returnPct - a.returnPct).slice(0, 12).reverse(), [filtered]);
@@ -66,18 +71,18 @@ export default function HistoryPage() {
         const controller = new AbortController(); detailRequest.current = controller;
         setLoadingId(id);
         try {
-            const { data } = await axios.get(`http://localhost:8000/api/backtest/${id}`, { signal: controller.signal });
+            const { data } = await axios.get(`/api/backtest/${id}`, { signal: controller.signal });
             setViewing(data); setDetailTab(tab); setChartType('line');
         } catch (failure) { if (!axios.isCancel(failure)) message.error('获取详情失败，请重试。'); }
         finally { if (!controller.signal.aborted) setLoadingId(null); }
     };
     const deleteRecord = async id => {
-        try { await axios.delete(`http://localhost:8000/api/backtest/${id}`); message.success('记录已删除'); await loadRecords(); }
+        try { await axios.delete(`/api/backtest/${id}`); message.success('记录已删除'); await loadRecords(); }
         catch { message.error('删除失败，请重试。'); }
     };
     const compareRecords = async () => {
         setCompareOpen(true); setCompareLoading(true); setComparisons([]); setCompareError('');
-        const responses = await Promise.allSettled(selectedIds.map(id => axios.get(`http://localhost:8000/api/backtest/${id}`)));
+        const responses = await Promise.allSettled(selectedIds.map(id => axios.get(`/api/backtest/${id}`)));
         const successful = responses.flatMap((response, index) => response.status === 'fulfilled' ? [{ ...records.find(record => record.id === selectedIds[index]), detail: response.value.data }] : []);
         setComparisons(successful);
         if (successful.length !== selectedIds.length) setCompareError('部分回测详情读取失败，当前仅展示成功读取的记录。');

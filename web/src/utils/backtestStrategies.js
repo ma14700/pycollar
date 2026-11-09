@@ -3,7 +3,7 @@ import { tomorrowStrategyOptions } from './tomorrowStrategy.js';
 import { strategyNameMap } from '../constants/index.js';
 
 export const strategyOptions = Object.entries({ ...Object.fromEntries(tomorrowStrategyOptions.map(item => [item.value,item.label])), ...strategyNameMap }).map(([value,label]) => ({value,label}));
-export const strategyParameterKeys = ['fast_period','slow_period','exit_period','ma_period','macd_fast','macd_slow','macd_signal','dkx_period','dkx_ma_period','atr_period','atr_multiplier','size_mode','risk_per_trade','equity_percent','take_profit_points','stop_loss_points','sl_mode','sl_value','tp_mode','tp_value','ma_type','risk_reward_ratio','allow_reverse','use_expma'];
+export const strategyParameterKeys = ['fast_period','slow_period','exit_period','ma_period','macd_fast','macd_slow','macd_signal','dkx_period','dkx_ma_period','atr_period','atr_multiplier','size_mode','risk_per_trade','equity_percent','take_profit_points','stop_loss_points','sl_mode','sl_value','tp_mode','tp_value','ma_type','risk_reward_ratio','allow_reverse','use_expma','exit_on_opposite_cross'];
 export const pickStrategyParameters = values => Object.fromEntries(strategyParameterKeys.filter(key => values[key] !== undefined).map(key => [key,values[key]]));
 export const isFixedMA144Strategy = name => Boolean(getMA144ExitStrategy(name)) || ['MA20MA144LongOnlyStrategy','MA20MA144ShortOnlyStrategy','MA20MA144LongShortStrategy'].includes(name);
 export function defaultStrategyParameters(name) {
@@ -160,11 +160,11 @@ export function buildStrategyParameters(strategyType, values) {
             fixed_size: values.fixed_size ? parseInt(values.fixed_size) : 20,
             contract_multiplier: contractMultiplier
         };
-      } else if (strategyType === 'MA20MA55RiskRewardStrategy') {
+      } else if (strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA20MA55RR3Strategy') {
         params = {
             fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
             slow_period: values.slow_period ? parseInt(values.slow_period) : 55,
-            risk_reward_ratio: values.risk_reward_ratio ? parseFloat(values.risk_reward_ratio) : 2.0,
+            risk_reward_ratio: Number(values.risk_reward_ratio ?? (strategyType === 'MA20MA55RR3Strategy' ? 3 : 2)),
             atr_period: values.atr_period ? parseInt(values.atr_period) : 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 2.0,
             risk_per_trade: riskPerTrade,
@@ -200,6 +200,18 @@ export function buildStrategyParameters(strategyType, values) {
       }
 
       if (isDirectionalMA55Strategy) params.size_mode = 'fixed';
+      if (strategyType === 'MA20MA55RR3Strategy') {
+          params.size_mode = 'fixed';
+          params.exit_on_opposite_cross = values.exit_on_opposite_cross ?? false;
+          for (const [key, fallback] of [['fast_period',20],['slow_period',55],['atr_period',14],['fixed_size',20],['atr_multiplier',2],['risk_reward_ratio',3]]) {
+              params[key] = Number(values[key] ?? fallback);
+              if (!Number.isFinite(params[key]) || params[key] <= 0 ||
+                  (['fast_period','slow_period','atr_period','fixed_size'].includes(key) && !Number.isInteger(params[key]))) {
+                  throw new Error('均线、ATR周期和手数必须为正整数，ATR倍数和止盈倍数必须大于0');
+              }
+          }
+          if (params.fast_period >= params.slow_period) throw new Error('快均线周期必须小于慢均线周期');
+      }
       if (strategyType === 'MA20MA55PointExitStrategy') {
           params.size_mode = 'fixed';
           for (const [key, fallback, label] of [['take_profit_points',100,'盈利'],['stop_loss_points',50,'亏损']]) {

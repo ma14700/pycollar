@@ -1,12 +1,13 @@
 import random
-import copy
+import json
+import math
 from .engine import BacktestEngine
 
 class StrategyOptimizer:
     def __init__(self):
         self.engine = BacktestEngine()
         
-    def optimize(self, symbol, period, initial_params, target_return=20.0, max_trials=10, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', data_source='main', data_provider='akshare', market_type='futures', initial_cash=1000000.0, contract_month=None):
+    def optimize(self, symbol, period, initial_params, target_return=20.0, max_trials=10, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', data_source='main', data_provider='akshare', market_type='futures', initial_cash=1000000.0, contract_month=None, baseline_result=None):
         """
         简单的随机搜索优化器
         :param symbol: 交易品种
@@ -58,8 +59,23 @@ class StrategyOptimizer:
              if strategy_name == 'DKXPartialTakeProfitStrategy':
                  param_ranges['take_profit_points'] = [30, 50, 80, 100, 150]
              elif strategy_name == 'DKXFixedTPSLStrategy':
-                 param_ranges['tp_points'] = [50, 80, 100, 150, 200]
-                 param_ranges['sl_points'] = [30, 50, 80, 100]
+                 param_ranges['take_profit_points'] = [50, 80, 100, 150, 200]
+                 param_ranges['stop_loss_points'] = [30, 50, 80, 100]
+
+        if not param_ranges or max_trials <= 0:
+            return initial_params.copy(), None
+        if baseline_result is None:
+            baseline_result = self.engine.run(symbol, period, initial_params, initial_cash=initial_cash,
+                start_date=start_date, end_date=end_date, strategy_name=strategy_name,
+                data_source=data_source, data_provider=data_provider, market_type=market_type,
+                contract_month=contract_month)
+        if 'error' in baseline_result:
+            return initial_params.copy(), None
+        metrics = baseline_result['metrics']
+        best_return = (metrics['final_value'] / metrics['initial_cash'] - 1) * 100
+        if not math.isfinite(best_return):
+            return initial_params.copy(), None
+        seen = {json.dumps(initial_params, sort_keys=True)}
         
         print(f"开始自动优化... 策略: {strategy_name}, 目标收益率: >{target_return}%, 最大尝试: {max_trials}次")
         
@@ -88,6 +104,10 @@ class StrategyOptimizer:
                      if trial_params['macd_fast'] >= trial_params['macd_slow']:
                          trial_params['macd_slow'] = trial_params['macd_fast'] + 5
 
+            signature = json.dumps(trial_params, sort_keys=True)
+            if signature in seen:
+                continue
+            seen.add(signature)
             print(f"优化尝试 #{i+1}: {trial_params}")
             
             # 运行回测
@@ -105,7 +125,7 @@ class StrategyOptimizer:
             print(f"  -> 收益率: {return_rate:.2f}%")
             
             # 更新最佳结果
-            if return_rate > best_return:
+            if math.isfinite(return_rate) and return_rate > best_return + 1e-9:
                 best_return = return_rate
                 best_result = result
                 best_params = trial_params

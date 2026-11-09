@@ -14,7 +14,7 @@ const parameterLabels = { fast_period:'快线周期',slow_period:'慢线周期',
     fixed_size:'固定手数',size_mode:'仓位模式',margin_rate:'保证金率',contract_multiplier:'合约乘数',
     entry_delay_bars:'开仓 K 线',exit_delay_bars:'平仓 K 线',atr_period:'ATR周期',atr_multiplier:'ATR倍数',risk_per_trade:'单笔风险比例',
     equity_percent:'资金比例',allow_reverse:'允许反手',take_profit_points:'止盈点数',stop_loss_points:'止损点数',
-    tp_value:'止盈值',sl_value:'止损值',tp_mode:'止盈方式',sl_mode:'止损方式',ma_type:'均线类型',risk_reward_ratio:'盈亏比',
+    tp_value:'止盈值',sl_value:'止损值',tp_mode:'止盈方式',sl_mode:'止损方式',ma_type:'均线类型',risk_reward_ratio:'盈亏比',exit_on_opposite_cross:'反向交叉提前离场',
     dkx_period:'DKX周期',dkx_ma_period:'DKX均线周期',macd_fast:'MACD快线',macd_slow:'MACD慢线',macd_signal:'MACD信号线',use_expma:'使用EMA' };
 const parameterValue = value => ({fixed:'固定手数',atr_risk:'风险比例',equity_percent:'资金比例',points:'点数',percent:'百分比',true:'是',false:'否'}[String(value)] || String(value));
 const numeric = (value, percent = false) => <span style={{ color: valueColor(value), whiteSpace: 'nowrap' }}>{percent ? formatPercent(value) : formatNumber(value)}</span>;

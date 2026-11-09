@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, Form, InputNumber, Select, Button, Row, Col, message, Table, Modal, Tag, Switch, Tooltip, Alert, Collapse } from 'antd';
 import { PlayCircleOutlined, LineChartOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import ChartPanel from '../../components/ChartPanel';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
@@ -33,8 +33,8 @@ const TomorrowStrategy = () => {
         const fetchData = async () => {
             try {
                 const [futuresRes, stockRes] = await Promise.all([
-                    axios.get('http://localhost:8000/api/symbols?market_type=futures'),
-                    axios.get('http://localhost:8000/api/symbols?market_type=stock')
+                    axios.get('/api/symbols?market_type=futures'),
+                    axios.get('/api/symbols?market_type=stock')
                 ]);
                 const fList = futuresRes.data.futures || [];
                 const sList = stockRes.data.stocks || [];
@@ -76,7 +76,7 @@ const TomorrowStrategy = () => {
         try {
             const payload = buildTomorrowAnalysisRequest(values);
 
-            const res = await axios.post('http://localhost:8000/api/strategy/batch-analyze', payload);
+            const res = await axios.post('/api/strategy/batch-analyze', payload);
             const rows = res.data.results || [];
             setResults(rows);
             const errors = rows.filter(row => row.error);
@@ -99,7 +99,7 @@ const TomorrowStrategy = () => {
         setDetailResult(null);
         try {
             const payload = getTomorrowDetailRequest(record);
-            const res = await axios.post('http://localhost:8000/api/strategy/detail', payload);
+            const res = await axios.post('/api/strategy/detail', payload);
             if (requestId === detailRequestId.current) setDetailResult(buildTomorrowDetailChart(res.data));
         } catch (err) {
             if (requestId === detailRequestId.current) message.error('加载详情失败: ' + (err.response?.data?.detail || err.message));
@@ -261,7 +261,8 @@ const TomorrowStrategy = () => {
                             </>}
                             {['MA20MA55PartialTakeProfitStrategy', 'DKXPartialTakeProfitStrategy', 'DKXFixedTPSLStrategy'].includes(strategyType) && <Form.Item name="take_profit_points" label="止盈点数" preserve={false} rules={[{ required: true }]}><InputNumber min={0.01} style={{ width: '100%' }} /></Form.Item>}
                             {strategyType === 'DKXFixedTPSLStrategy' && <Form.Item name="stop_loss_points" label="止损点数" preserve={false} rules={[{ required: true }]}><InputNumber min={0.01} style={{ width: '100%' }} /></Form.Item>}
-                            {strategyType === 'MA20MA55RiskRewardStrategy' && <>
+                            {['MA20MA55RiskRewardStrategy','MA20MA55RR3Strategy'].includes(strategyType) && <>
+                                {strategyType === 'MA20MA55RR3Strategy' && <Form.Item name="exit_on_opposite_cross" label="反向交叉提前离场" valuePropName="checked" preserve={false}><Switch /></Form.Item>}
                                 <Form.Item name="risk_reward_ratio" label="盈亏比" preserve={false} rules={[{ required: true }]}><InputNumber min={0.1} style={{ width: '100%' }} /></Form.Item>
                                 <Form.Item name="atr_period" label="ATR周期" preserve={false} rules={[{ required: true }]}><InputNumber min={1} precision={0} style={{ width: '100%' }} /></Form.Item>
                                 <Form.Item name="atr_multiplier" label="止损ATR倍数" preserve={false} rules={[{ required: true }]}><InputNumber min={0.1} style={{ width: '100%' }} /></Form.Item>

@@ -1,6 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBacktestSaveRequests } from '../src/utils/backtestSave.js';
+import { buildBacktestSaveRequests, createBacktestSaver } from '../src/utils/backtestSave.js';
+
+test('concurrent save clicks share requests and failed batches resume from the failed item', async () => {
+  const calls = []; let fail = true;
+  const save = createBacktestSaver(async payload => {
+    calls.push(payload.symbol);
+    if (payload.symbol === 'B' && fail) throw Error('offline');
+    return {id: calls.length};
+  });
+  const results = {isBatch: true, items: ['A','B','C'].map(symbol => ({symbol, success: true, data: {metrics: {}}}))};
+  await Promise.all([assert.rejects(save(results)), assert.rejects(save(results))]);
+  assert.deepEqual(calls, ['A','B']);
+  fail = false;
+  assert.equal(await save(results), 3);
+  await save(results);
+  assert.deepEqual(calls, ['A','B','B','C']);
+  await save({metrics: {}, data_info: {symbol: 'new'}});
+  assert.equal(calls.at(-1), 'new');
+});
+
+test('archives keep actual resolved strategy parameters, including defaults and execution delays', () => {
+  const [saved] = buildBacktestSaveRequests({metrics: {}, strategy_info: {name: 'actual', params: {fast_period: 20, atr_period: 14}},
+    backtest_request: {strategy_name: 'requested', strategy_params: {fast_period: 5, entry_delay_bars: 3}}});
+  assert.equal(saved.strategy_name, 'actual');
+  assert.deepEqual(saved.strategy_params, {fast_period: 20, atr_period: 14, entry_delay_bars: 3});
+});
 
 test('single selection from the multi-select form saves as a symbol string', () => {
   const [payload] = buildBacktestSaveRequests({ metrics: { net_profit: 12, win_rate: '50%' } },

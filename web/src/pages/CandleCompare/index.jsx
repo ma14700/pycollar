@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, DatePicker, Empty, Form, InputNumber, Modal, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography } from 'antd';
 import { FundViewOutlined, SearchOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
 import ContractMonthSelect from '../../components/ContractMonthSelect';
@@ -53,7 +53,7 @@ const CandleComparePage = () => {
 
     useEffect(() => {
         const controller = new AbortController();
-        axios.get('http://localhost:8000/api/symbols', { params: { market_type: 'futures' }, signal: controller.signal })
+        axios.get('/api/symbols', { params: { market_type: 'futures' }, signal: controller.signal })
             .then(({ data }) => {
                 const list = data.futures || [];
                 setSymbols(list);
@@ -91,7 +91,7 @@ const CandleComparePage = () => {
             const runs = [];
             for (const item of buildContractComparisons(payload, values.contract_month)) {
                 try {
-                    const { data } = await axios.post('http://localhost:8000/api/candles/compare', item, { signal: controller.signal });
+                    const { data } = await axios.post('/api/candles/compare', item, { signal: controller.signal });
                     runs.push({ symbol: item.symbol, data });
                 } catch (failure) {
                     if (controller.signal.aborted) return;

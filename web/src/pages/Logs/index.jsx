@@ -1,8 +1,9 @@
+import { loadHistoryRecords } from '../../utils/historyRecords';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Card, Empty, Select, Skeleton, Tag } from 'antd';
 import { FileTextOutlined, ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import { useBacktest } from '../../context/BacktestContext';
 import { AnalysisHero } from '../../components/AnalyticsUi';
 import TradeLogDashboard from '../../components/TradeLogDashboard';
@@ -24,14 +25,15 @@ export default function LogsPage() {
     useEffect(() => {
         const controller = new AbortController();
         setListLoading(true);
-        axios.get('http://localhost:8000/api/backtest/list', { signal: controller.signal })
-            .then(({ data }) => {
+        loadHistoryRecords(axios.get, controller.signal)
+            .then(data => {
+                if (controller.signal.aborted) return;
                 const items = Array.isArray(data) ? data : [];
                 setRecords(items);
                 setSelection(previous => previous ?? (results ? 'current' : items.length ? `history:${items[0].id}` : undefined));
                 setListError('');
             })
-            .catch(failure => { if (!axios.isCancel(failure)) setListError('历史回测记录读取失败，请检查后端连接后刷新。'); })
+            .catch(failure => { if (!controller.signal.aborted && !axios.isCancel(failure)) setListError('历史回测记录读取失败，请检查后端连接后刷新。'); })
             .finally(() => { if (!controller.signal.aborted) setListLoading(false); });
         return () => controller.abort();
     }, [refresh, results]);
@@ -40,7 +42,7 @@ export default function LogsPage() {
         if (!selection || selection === 'current') { setDetail(null); setLoading(false); setDetailError(''); return; }
         const controller = new AbortController();
         setLoading(true); setDetail(null); setDetailError('');
-        axios.get(`http://localhost:8000/api/backtest/${selection.split(':')[1]}`, { signal: controller.signal })
+        axios.get(`/api/backtest/${selection.split(':')[1]}`, { signal: controller.signal })
             .then(({ data }) => setDetail(data))
             .catch(failure => { if (!axios.isCancel(failure)) setDetailError('这条回测的日志读取失败，请刷新或选择其他记录。'); })
             .finally(() => { if (!controller.signal.aborted) setLoading(false); });

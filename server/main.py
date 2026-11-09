@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List, Literal
+from typing import Optional, Dict, Any, List, Literal, Annotated
 import uvicorn
 import sys
 import os
@@ -14,6 +14,7 @@ import akshare as ak
 import datetime
 from core.engine import BacktestEngine
 from core.database import init_db, SessionLocal, BacktestRecord
+from core.history import history_page, summary_query, summary
 from core.optimizer import StrategyOptimizer
 from core.constants import get_multiplier, FUTURES_MULTIPLIERS, FUTURES_NAMES
 from core.tq_provider import provider_status, fetch_tq_quote, fetch_tq_contracts, tq_symbol
@@ -54,7 +55,7 @@ class BacktestRequest(BaseModel):
     market_type: str = "futures" # 市场类型：futures/stock
     strategy_params: Dict[str, Any]
     initial_cash: float = 1000000.0 # 初始资金
-    auto_optimize: bool = True # 是否开启自动优化
+    auto_optimize: bool = False # 是否开启自动优化
     start_date: Optional[str] = None # 开始时间 (YYYY-MM-DD)
     end_date: Optional[str] = None   # 结束时间 (YYYY-MM-DD)
     strategy_name: str = "TrendFollowingStrategy"
@@ -304,7 +305,7 @@ def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/backtest")
-def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
+def run_backtest(request: BacktestRequest):
     if request.contract_month:
         try:
             scope = contract_scope(request.symbol, request.contract_month, request.market_type,
@@ -339,31 +340,11 @@ def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
     net_profit = result['metrics']['net_profit']
     return_rate = (net_profit / initial_cash) * 100
     
-    # 保存初始结果
-    record = BacktestRecord(
-        symbol=request.symbol,
-        period=request.period,
-        strategy_name=request.strategy_name,
-        strategy_params=request.strategy_params,
-        initial_cash=initial_cash,
-        final_value=final_value,
-        net_profit=net_profit,
-        return_rate=return_rate,
-        sharpe_ratio=result['metrics']['sharpe_ratio'],
-        max_drawdown=result['metrics']['max_drawdown'],
-        total_trades=result['metrics']['total_trades'],
-        win_rate=result['metrics']['win_rate'],
-        is_optimized=0
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    
     # 2. 检查是否需要自动优化
     optimized_result = None
     optimized_params = None
     
-    if request.auto_optimize and return_rate < 20.0:
+    if request.auto_optimize and request.strategy_name != 'MA20MA55RR3Strategy' and return_rate < 20.0:
         optimizer = StrategyOptimizer()
         best_params, best_res = optimizer.optimize(
             symbol=request.symbol, 
@@ -377,35 +358,13 @@ def run_backtest(request: BacktestRequest, db: Session = Depends(get_db)):
             data_provider=request.data_provider,
             market_type=request.market_type,
             initial_cash=request.initial_cash,
-            contract_month=request.contract_month
+            contract_month=request.contract_month,
+            baseline_result=result
         )
         if best_res:
              optimized_result = best_res
              optimized_params = best_params
              
-             # 保存优化后的结果
-             opt_cash = best_res['metrics']['initial_cash']
-             opt_profit = best_res['metrics']['net_profit']
-             opt_return = (opt_profit / opt_cash) * 100
-             
-             opt_record = BacktestRecord(
-                symbol=request.symbol,
-                period=request.period,
-                strategy_name=request.strategy_name,
-                strategy_params=best_params,
-                initial_cash=opt_cash,
-                final_value=best_res['metrics']['final_value'],
-                net_profit=opt_profit,
-                return_rate=opt_return,
-                sharpe_ratio=best_res['metrics']['sharpe_ratio'],
-                max_drawdown=best_res['metrics']['max_drawdown'],
-                total_trades=best_res['metrics']['total_trades'],
-                win_rate=best_res['metrics']['win_rate'],
-                is_optimized=1
-            )
-             db.add(opt_record)
-             db.commit()
-
     message_str = "回测完成"
     if optimized_result:
         message_str += " (已自动优化)"
@@ -451,7 +410,7 @@ class SaveBacktestRequest(BaseModel):
     detail_data: Dict[str, Any]
 
 @app.post("/api/backtest/save")
-async def save_backtest_result(request: SaveBacktestRequest, db: Session = Depends(get_db)):
+def save_backtest_result(request: SaveBacktestRequest, db: Session = Depends(get_db)):
     try:
         record = BacktestRecord(
             symbol=request.symbol,
@@ -474,35 +433,28 @@ async def save_backtest_result(request: SaveBacktestRequest, db: Session = Depen
         db.refresh(record)
         return {"status": "success", "id": record.id}
     except Exception as e:
+        db.rollback()
         print(f"Save error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/backtest/list")
-async def list_backtests(db: Session = Depends(get_db)):
+def list_backtests(db: Session = Depends(get_db)):
     try:
-        records = db.query(BacktestRecord).filter(BacktestRecord.detail_data.isnot(None)).order_by(desc(BacktestRecord.timestamp)).all()
-        result = []
-        for r in records:
-            result.append({
-                "id": r.id,
-                "timestamp": r.timestamp,
-                "symbol": r.symbol,
-                "period": r.period,
-                "strategy_name": r.strategy_name,
-                "final_value": r.final_value,
-                "return_rate": r.return_rate,
-                "net_profit": r.net_profit,
-                "max_drawdown": r.max_drawdown,
-                "win_rate": r.win_rate,
-                "total_trades": r.total_trades
-            })
-        return result
+        records = summary_query(db).order_by(desc(BacktestRecord.timestamp), desc(BacktestRecord.id)).all()
+        return [summary(record) for record in records]
     except Exception as e:
         print(f"List error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get('/api/backtest/history')
+def paged_backtests(cursor: Annotated[Optional[int], Query(gt=0)] = None,
+                    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+                    db: Session = Depends(get_db)):
+    return history_page(db, cursor=cursor, limit=limit)
+
+
 @app.get("/api/backtest/{record_id}")
-async def get_backtest_detail(record_id: int, db: Session = Depends(get_db)):
+def get_backtest_detail(record_id: int, db: Session = Depends(get_db)):
     try:
         record = db.query(BacktestRecord).filter(BacktestRecord.id == record_id).first()
         if not record:
@@ -537,12 +489,14 @@ async def get_backtest_detail(record_id: int, db: Session = Depends(get_db)):
             "metrics": metrics,
             "detail_data": record.detail_data
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Detail error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/backtest/{record_id}")
-async def delete_backtest(record_id: int, db: Session = Depends(get_db)):
+def delete_backtest(record_id: int, db: Session = Depends(get_db)):
     try:
         record = db.query(BacktestRecord).filter(BacktestRecord.id == record_id).first()
         if not record:
@@ -550,7 +504,10 @@ async def delete_backtest(record_id: int, db: Session = Depends(get_db)):
         db.delete(record)
         db.commit()
         return {"status": "success", "message": "Record deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
+        db.rollback()
         print(f"Delete error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -608,7 +565,7 @@ class ScanRequest(BaseModel):
     strategy_name: str = "TrendFollowingStrategy"
 
 @app.post("/api/strategy/scan")
-async def scan_strategy(request: ScanRequest):
+def scan_strategy(request: ScanRequest):
     engine = BacktestEngine()
     results = engine.scan_signals(
         symbols=request.symbols,

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Form, Select } from 'antd';
-import axios from 'axios';
+import axios from '../utils/api.js';
 
 const DataProviderSelect = ({ form, onChange, disabled = false }) => {
     const market = Form.useWatch('market_type', form) || 'futures';
@@ -8,7 +8,7 @@ const DataProviderSelect = ({ form, onChange, disabled = false }) => {
     const [status, setStatus] = useState(null);
     useEffect(() => {
         let active = true;
-        axios.get('http://localhost:8000/api/data/providers')
+        axios.get('/api/data/providers')
             .then(({ data }) => { if (active) setStatus(data.tqsdk); })
             .catch(() => { if (active) setStatus(null); });
         return () => { active = false; };

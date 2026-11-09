@@ -2,7 +2,6 @@ import backtrader as bt
 import pandas as pd
 import numpy as np
 import datetime
-import importlib
 from .data_loader import fetch_data
 from . import strategy
 from .constants import get_multiplier
@@ -67,9 +66,7 @@ class BacktestEngine:
             delay_params = execution_delay_params(strategy_params)
         except (ValueError, TypeError) as error:
             return {"error": str(error)}
-        print("DEBUG: Engine.run called with Modified Code")
-        # 强制重载策略模块，确保使用最新代码
-        importlib.reload(strategy)
+        # Strategy classes stay stable across concurrent requests; reload via service restart.
         
         # 获取策略类
         if not hasattr(strategy, strategy_name):
@@ -253,7 +250,10 @@ class BacktestEngine:
                     size = order.executed.size
                     price = order.executed.price
                     # 计算交易前的持仓
-                    current_pos = self.position.size
+                    # Notifications can contain both entry and protective exit
+                    # from the same bar; use each fill's position snapshot.
+                    current_pos = order.executed.psize
+                    self.max_pos_size = max(self.max_pos_size, abs(current_pos))
                     prev_pos = current_pos - size
                     
                     # 确保数值比较的稳定性
@@ -842,6 +842,7 @@ class BacktestEngine:
 
         equity_stats = equity_statistics(final_equity_curve, initial_cash, period)
         raw_result = {
+            "risk_reward_trades": getattr(strat, 'risk_reward_trades', []),
             "status": "success",
             "contract_info": contract_info,
             "strategy_info": {"name": strategy_name, "params": filtered_params},
@@ -947,7 +948,6 @@ class BacktestEngine:
         """
         扫描最近 N 根 K 线的开仓信号
         """
-        importlib.reload(strategy)
 
         if not hasattr(strategy, strategy_name):
              if hasattr(strategy, 'TrendFollowingStrategy'):

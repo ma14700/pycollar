@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Button, message } from 'antd';
 import { CodeOutlined } from '@ant-design/icons';
 import Editor from '@monaco-editor/react';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 
 const EditorPage = () => {
   const [strategyCode, setStrategyCode] = useState('');
@@ -13,7 +13,7 @@ const EditorPage = () => {
   }, []);
 
   const fetchStrategyCode = () => {
-      axios.get('http://localhost:8000/api/strategy/code')
+      axios.get('/api/strategy/code')
         .then(res => {
             setStrategyCode(res.data.code);
         })
@@ -24,7 +24,7 @@ const EditorPage = () => {
 
   const saveStrategyCode = () => {
       setSavingCode(true);
-      axios.post('http://localhost:8000/api/strategy/code', { code: strategyCode })
+      axios.post('/api/strategy/code', { code: strategyCode })
         .then(res => {
             message.success('策略代码保存成功');
         })

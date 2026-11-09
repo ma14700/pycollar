@@ -1,5 +1,14 @@
 // Owned by BacktestProvider, which stays mounted above the router.
 // Route subscribers can come and go without owning or canceling this queue.
+export function backtestErrorMessage(error) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) return detail.map(item =>
+        [Array.isArray(item.loc) ? item.loc.filter(key => key !== 'body').join('.') : '', item.msg || '参数无效']
+            .filter(Boolean).join('：')).join('；');
+    return error.message || '回测请求失败';
+}
+
 export function createBacktestTask(request, now = Date.now) {
     let state = { loading: false, activeRun: null, results: null, runError: null };
     let pending = null;
@@ -28,7 +37,7 @@ export function createBacktestTask(request, now = Date.now) {
                             data: { ...data, backtest_request: payload } });
                     } catch (error) {
                         items.push({ symbol: payload.symbol, strategy_name: payload.strategy_name, success: false,
-                            error: error.response?.data?.detail || error.message || '回测请求失败' });
+                            error: backtestErrorMessage(error) });
                     }
                     update({ activeRun: { ...state.activeRun, completed: items.length,
                         failed: items.filter(item => !item.success).length } });

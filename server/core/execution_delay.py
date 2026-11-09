@@ -48,4 +48,36 @@ class SignalDelayBroker(bt.brokers.BackBroker):
     def _try_exec_market(self, order, popen, phigh, plow):
         if len(order.data) < order.info.get('execution_bar', 0):
             return
-        return super()._try_exec_market(order, popen, phigh, plow)
+        super()._try_exec_market(order, popen, phigh, plow)
+        if order.status == order.Completed and order.info.get('rr_entry'):
+            # Install protection before this bar's range is processed, using
+            # the actual fill and the ATR frozen on the signal bar.
+            children = order.owner.install_rr_protection(order)
+            for child in reversed(children):
+                self.pending.remove(child)
+                self.pending.appendleft(child)
+
+    def next(self):
+        for order in list(self.pending):
+            if (order.alive() and order.exectype == bt.Order.Market
+                    and order.info.get('rr_reason')
+                    and len(order.data) >= order.info.get('execution_bar', 0)):
+                self.pending.remove(order)
+                self.pending.appendleft(order)
+        # An opening gap through a target happens before the intrabar range.
+        # Otherwise stops are queued first: ambiguous bars use stop-first fills.
+        for order in list(self.pending):
+            if order.alive() and order.info.get('rr_reason') == 'take_profit':
+                price = order.data.open[0]
+                hit = price <= order.created.price if order.isbuy() else price >= order.created.price
+                if hit:
+                    self.pending.remove(order)
+                    self.pending.appendleft(order)
+        for order in list(self.pending):
+            if order.alive() and order.info.get('rr_reason') == 'stop_loss':
+                price = order.data.open[0]
+                hit = price >= order.created.price if order.isbuy() else price <= order.created.price
+                if hit:
+                    self.pending.remove(order)
+                    self.pending.appendleft(order)
+        super().next()

@@ -8,7 +8,7 @@ import {
   DashboardOutlined,
   LineChartOutlined
 } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import dayjs from 'dayjs';
 import ContractInfo from '../../components/ContractInfo';
 import MetricsPanel from '../../components/MetricsPanel';
@@ -16,7 +16,6 @@ import ChartPanel from '../../components/ChartPanel';
 import { useBacktest } from '../../context/BacktestContext';
 import DataProviderSelect from '../../components/DataProviderSelect';
 import DataSourceInfo from '../../components/DataSourceInfo';
-import { buildBacktestSaveRequests } from '../../utils/backtestSave';
 import { contractWindow, applyContractBacktest, normalizeContractMonths, buildBacktestTargets, filterContractMonthOptions } from '../../utils/contractBacktest';
 import BacktestLoading from '../../components/BacktestLoading';
 import ContractMonthLabel from '../../components/ContractMonthLabel';
@@ -32,9 +31,10 @@ const { Option } = Select;
 
 const BacktestPage = () => {
   const { results, symbols, setSymbols, savedFormValues, setSavedFormValues, savedStrategyType, setSavedStrategyType, selectedStrategies, setSelectedStrategies, strategyConfigs, setStrategyConfigs,
-    loading, activeRun, runError, startBacktest, autoOptimize, setAutoOptimize, currentParams, setCurrentParams,
+    loading, activeRun, runError, startBacktest, saveBacktestResults, autoOptimize, setAutoOptimize, currentParams, setCurrentParams,
     only159Contracts } = useBacktest();
   const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
   const pageRef = useRef(null);
   const configRef = useRef(null);
   const resultsRef = useRef(null);
@@ -57,6 +57,7 @@ const BacktestPage = () => {
   const isLongShortMA144Strategy = ['MA20MA144LongShortStrategy', 'MA20MA144CrossExitLongShortStrategy'].includes(strategyType);
   const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(strategyType);
   const isPointExitStrategy = strategyType === 'MA20MA55PointExitStrategy';
+  const isRR3Strategy = strategyType === 'MA20MA55RR3Strategy';
   const isDailyMACDStrategy = strategyType === 'MA20MA60DailyMACDStrategy';
   const [quoteInfo, setQuoteInfo] = useState(null);
   const quoteRequestId = useRef(0);
@@ -93,7 +94,7 @@ const BacktestPage = () => {
         return;
     }
     setContractsLoading(true);
-    axios.get('http://localhost:8000/api/futures/contracts', { params: { symbol: singleProduct } })
+    axios.get('/api/futures/contracts', { params: { symbol: singleProduct } })
       .then(({ data }) => {
         if (!active) return;
         const options = data.contracts || [];
@@ -131,8 +132,8 @@ const BacktestPage = () => {
     const fetchData = async () => {
       try {
         const [futuresRes, stockRes] = await Promise.all([
-          axios.get('http://localhost:8000/api/symbols?market_type=futures'),
-          axios.get('http://localhost:8000/api/symbols?market_type=stock')
+          axios.get('/api/symbols?market_type=futures'),
+          axios.get('/api/symbols?market_type=stock')
         ]);
         
         const fList = futuresRes.data.futures || [];
@@ -205,7 +206,7 @@ const BacktestPage = () => {
         dataSource = specific.data_source;
         dataProvider = specific.data_provider;
     }
-    axios.get('http://localhost:8000/api/quote/latest', { params: { symbol: targetSymbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
+    axios.get('/api/quote/latest', { params: { symbol: targetSymbol, market_type: marketType, data_source: dataSource, data_provider: dataProvider } })
       .then(res => {
         if (requestId === quoteRequestId.current) setQuoteInfo(res.data);
       })
@@ -301,7 +302,7 @@ const BacktestPage = () => {
                   data_source: values.data_source || 'main',
                   data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
                   strategy_name: name, strategy_params: { ...params, contract_multiplier: symbolObj?.multiplier || values.contract_multiplier || 1 },
-                  initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) || name === 'MA20MA60DailyMACDStrategy' ? false : autoOptimize,
+                  initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) || ['MA20MA60DailyMACDStrategy','MA20MA55RR3Strategy'].includes(name) ? false : autoOptimize,
               };
               if (values.date_range?.length === 2) {
                   payload.start_date = values.date_range[0].format('YYYY-MM-DD');
@@ -325,25 +326,17 @@ const BacktestPage = () => {
 
   const handleSaveBacktest = async () => {
     if (!results) return;
-    
+    setSaving(true);
     try {
-      const payloads = buildBacktestSaveRequests(results, {
-        symbol: form.getFieldValue('symbol'),
-        period: form.getFieldValue('period'),
-        strategy_name: strategyType,
-        strategy_params: currentParams || {},
+      const count = await saveBacktestResults(results, {
+        symbol: form.getFieldValue('symbol'), period: form.getFieldValue('period'),
+        strategy_name: strategyType, strategy_params: currentParams || {},
       });
-      if (!payloads.length) {
-        message.warning('暂无成功的回测结果可保存');
-        return;
-      }
-      for (const payload of payloads) {
-        await axios.post('http://localhost:8000/api/backtest/save', payload);
-      }
-      message.success(payloads.length > 1 ? `已保存 ${payloads.length} 项回测结果` : '回测结果已保存');
+      if (!count) message.warning('暂无成功的回测结果可保存');
+      else message.success(count > 1 ? `已保存 ${count} 项回测结果` : '回测结果已保存');
     } catch (error) {
-      message.error('保存失败: ' + error.message);
-    }
+      message.error('保存未全部完成，重试会跳过已保存项目：' + error.message);
+    } finally { setSaving(false); }
   };
 
   return (
@@ -527,7 +520,7 @@ const BacktestPage = () => {
                     默认 0 = 不额外延迟，下一根开盘成交；1 沿用下一根开盘，2 = 第二根开盘。适用于信号市价单；反手取两者较大值，止盈止损挂单保持触价成交。
                 </div>
 
-                {isMA144SignalStrategy || isDailyMACDStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
+                {isMA144SignalStrategy || isDailyMACDStrategy ? null : isPointExitStrategy || isDirectionalMA55Strategy || strategyType === 'TrendFollowingStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || isRR3Strategy || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Row gutter={16}>
                             <Col span={12}>
@@ -555,11 +548,19 @@ const BacktestPage = () => {
                                 <Input type="number" />
                             </Form.Item>
                         )}
-                        {strategyType === 'MA20MA55RiskRewardStrategy' && (
+                        {(isRR3Strategy || strategyType === 'MA20MA55RiskRewardStrategy') && (
                             <>
+                                {isRR3Strategy && <>
+                                    <Alert type="info" showIcon style={{ marginBottom: 16 }} message="20/55 交叉入场 · ATR 风险止盈止损"
+                                        description="使用所选周期；信号时冻结 ATR，按实际开仓价设置止损与止盈。默认止损 2×ATR、止盈 3R，全仓退出后等下一次交叉。同根触及两端按止损优先；跳空按可成交价处理，实际收益包含费用。" />
+                                    <Form.Item name="exit_on_opposite_cross" label="反向交叉提前离场" valuePropName="checked"
+                                        tooltip="关闭：只按止盈止损退出；开启：反向交叉按平仓 K 线配置提前平仓，不反手。等待期间止盈止损继续生效。回测结束会强平。">
+                                        <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                    </Form.Item>
+                                </>}
                                 <Row gutter={16}>
                                     <Col span={12}>
-                                        <Form.Item name="risk_reward_ratio" label="盈亏比(R:R)" tooltip="止盈距离 / 止损距离">
+                                        <Form.Item name="risk_reward_ratio" label="止盈倍数（赚 / 亏）" tooltip="止盈距离 / 止损距离">
                                             <Input type="number" step="0.1" />
                                         </Form.Item>
                                     </Col>
@@ -713,7 +714,7 @@ const BacktestPage = () => {
                 >
                     {({ getFieldValue }) => {
                         const sizeMode = getFieldValue('size_mode');
-                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy && !isDirectionalMA55Strategy && !isDailyMACDStrategy) {
+                        if ((strategyType === 'TrendFollowingStrategy' || !sizeMode || sizeMode === 'atr_risk') && !isRR3Strategy && strategyType !== 'MA20MA55RiskRewardStrategy' && !isMA144SignalStrategy && !isDirectionalMA55Strategy && !isDailyMACDStrategy) {
                             return (
                                 <Form.Item name="atr_multiplier" label="ATR止损倍数">
                                     <Input type="number" step="0.1" />
@@ -724,7 +725,7 @@ const BacktestPage = () => {
                     }}
                 </Form.Item>
 
-                {isMA144SignalStrategy || isDirectionalMA55Strategy || isPointExitStrategy || isDailyMACDStrategy ? (
+                {isRR3Strategy || isMA144SignalStrategy || isDirectionalMA55Strategy || isPointExitStrategy || isDailyMACDStrategy ? (
                     <Form.Item name="fixed_size" label="固定手数 (手)" initialValue={20} rules={[
                         { required: true, message: '请输入固定手数' },
                         { validator: (_, value) => Number.isInteger(Number(value)) && Number(value) > 0
@@ -732,7 +733,7 @@ const BacktestPage = () => {
                     ]}>
                         <Input type="number" min={1} step={1} />
                     </Form.Item>
-                ) : strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
+                ) : strategyType === 'MA55BreakoutStrategy' || strategyType === 'MA55TouchExitStrategy' || strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PartialTakeProfitStrategy' || strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy' || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'DualMAFixedTPSLStrategy' || isRR3Strategy || strategyType === 'MA20MA55RiskRewardStrategy' || strategyType === 'MA5MA20CrossoverStrategy' || strategyType === 'MA5MA55CrossoverStrategy' || strategyType === 'MA20MA60CrossoverStrategy' ? (
                     <>
                         <Form.Item name="size_mode" label="开仓模式" initialValue="fixed">
                             <Radio.Group>
@@ -794,10 +795,10 @@ const BacktestPage = () => {
                 <Form.Item name="contract_multiplier" label="合约乘数" hidden>
                     <Input type="number" />
                 </Form.Item>
-                {strategyType !== 'MA20MA55RiskRewardStrategy' && <Form.Item name="atr_period" hidden><Input /></Form.Item>}
+                {!isRR3Strategy && strategyType !== 'MA20MA55RiskRewardStrategy' && <Form.Item name="atr_period" hidden><Input /></Form.Item>}
 
-                <Form.Item label="自动优化 (若收益<20%)" tooltip="当回测年化收益率低于20%时，系统会自动尝试优化参数以寻找更好的结果。">
-                    <Switch checked={autoOptimize} onChange={setAutoOptimize} disabled={isMA144SignalStrategy || isDailyMACDStrategy} />
+                <Form.Item label="自动优化 (若收益<20%)" tooltip="当区间总收益率低于20%时，对支持的策略尝试参数搜索，仅展示优于原参数的结果。同一区间筛选不代表未来收益。">
+                    <Switch checked={autoOptimize} onChange={setAutoOptimize} disabled={!['TrendFollowingStrategy','MA55BreakoutStrategy','DKXStrategy','DKXPartialTakeProfitStrategy','DKXFixedTPSLStrategy'].includes(strategyType)} />
                 </Form.Item>
 
                 <Form.Item>
@@ -823,7 +824,7 @@ const BacktestPage = () => {
                 </Form.Item>
                 <Form.Item>
                         <Tooltip title="保存当前回测配置和结果">
-                        <Button icon={<SaveOutlined />} onClick={handleSaveBacktest} block size="large" disabled={!results}>
+                        <Button icon={<SaveOutlined />} onClick={handleSaveBacktest} loading={saving} block size="large" disabled={!results}>
                             保存回测结果
                         </Button>
                         </Tooltip>

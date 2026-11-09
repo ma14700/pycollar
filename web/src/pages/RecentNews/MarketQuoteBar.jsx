@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd';
 import { DollarCircleOutlined, ReloadOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 
 const instruments = [{ code: 'UKOIL', name: '布伦特原油', unit: '美元/桶' }, { code: 'USOIL', name: 'WTI 原油', unit: '美元/桶' }, { code: 'XAGUSD', name: '现货白银', unit: '美元/盎司' }];
 const AUTO_REFRESH_SECONDS = 240;
@@ -29,7 +29,7 @@ const MarketQuoteBar = () => {
         // refresh is pending or has failed.
         setData(null);
         try {
-            const response = await axios.get('http://localhost:8000/api/market/quotes', {
+            const response = await axios.get('/api/market/quotes', {
                 params: { refresh }, signal: controller.signal, timeout: 75000,
             });
             if (request.current === controller) setData(response.data);

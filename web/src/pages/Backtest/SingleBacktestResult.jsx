@@ -7,6 +7,7 @@ import {
 import MetricsPanel from '../../components/MetricsPanel';
 import ChartPanel from '../../components/ChartPanel';
 import DataSourceInfo from '../../components/DataSourceInfo';
+import RiskRewardDetails from '../../components/RiskRewardDetails';
 
 const SingleBacktestResult = ({ results }) => {
   const [chartType, setChartType] = useState('line');
@@ -65,6 +66,7 @@ const SingleBacktestResult = ({ results }) => {
       >
         <ChartPanel chartType={chartType} results={results} onChartClick={(params) => console.log('Chart clicked:', params)} />
       </Card>
+      <RiskRewardDetails results={results} />
     </div>
   );
 };

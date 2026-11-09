@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Select } from 'antd';
-import axios from 'axios';
+import axios from '../utils/api.js';
 import { useBacktest } from '../context/BacktestContext';
 import { filterContractMonthOptions } from '../utils/contractBacktest';
 import ContractMonthLabel from './ContractMonthLabel';
@@ -28,7 +28,7 @@ export default function ContractMonthSelect({ form, symbolsField = 'symbol', dis
         if (cache.current.has(product)) { setOptions(cache.current.get(product)); return; }
         const controller = new AbortController();
         setLoading(true);
-        axios.get('http://localhost:8000/api/futures/contracts', { params: { symbol: product }, signal: controller.signal })
+        axios.get('/api/futures/contracts', { params: { symbol: product }, signal: controller.signal })
             .then(({ data }) => {
                 if (controller.signal.aborted) return;
                 cache.current.set(product, data.contracts || []);

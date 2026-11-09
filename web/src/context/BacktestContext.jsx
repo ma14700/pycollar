@@ -1,13 +1,15 @@
 import React, { createContext, useState, useContext, useEffect, useSyncExternalStore } from 'react';
-import axios from 'axios';
+import axios from '../utils/api.js';
 import { message } from 'antd';
 import { createBacktestTask } from '../utils/backtestTask';
+import { createBacktestSaver } from '../utils/backtestSave';
 
 const BacktestContext = createContext();
 
 export const BacktestProvider = ({ children }) => {
+  const [saveBacktestResults] = useState(() => createBacktestSaver(payload => axios.post('/api/backtest/save', payload)));
   const [task] = useState(() => createBacktestTask(payload =>
-    axios.post('http://localhost:8000/api/backtest', payload).then(response => response.data)));
+    axios.post('/api/backtest', payload).then(response => response.data)));
   const taskState = useSyncExternalStore(task.subscribe, task.getSnapshot);
   const [symbols, setSymbols] = useState([]);
   const [savedFormValues, setSavedFormValues] = useState(null);
@@ -28,7 +30,7 @@ export const BacktestProvider = ({ children }) => {
   
   return (
     <BacktestContext.Provider value={{ 
-      ...taskState, startBacktest: task.start,
+      ...taskState, startBacktest: task.start, saveBacktestResults,
       symbols, setSymbols,
       savedFormValues, setSavedFormValues,
       savedStrategyType, setSavedStrategyType,

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, List, Row, Select, Space, Spin, Tag, Typography } from 'antd';
 import { ClockCircleOutlined, GlobalOutlined, ReadOutlined, ReloadOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import MarketQuoteBar from './MarketQuoteBar';
 import './style.css';
 
@@ -45,7 +45,7 @@ const RecentNewsPage = () => {
         // expired headline after crossing the rolling 72-hour boundary.
         setData(null);
         try {
-            const response = await axios.get('http://localhost:8000/api/news/recent', {
+            const response = await axios.get('/api/news/recent', {
                 params: { refresh, provider }, signal: controller.signal, timeout: 80000,
             });
             if (request.current !== controller) return;

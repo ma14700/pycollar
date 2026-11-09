@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBacktestTask } from '../src/utils/backtestTask.js';
+
+test('validation error arrays become readable text and the queue continues', async () => {
+  const queue = createBacktestTask(async payload => {
+    if (payload.symbol === 'bad') throw {response: {data: {detail: [{loc: ['body','initial_cash'], msg: 'must be positive'}]}}};
+    return {metrics: {net_profit: 1}};
+  });
+  await queue.start({tasks: [{payload: {symbol: 'bad'}}, {payload: {symbol: 'good'}}]});
+  const state = queue.getSnapshot();
+  assert.equal(state.results.items[0].error, 'initial_cash：must be positive');
+  assert.equal(state.results.summary.success, 1);
+  assert.equal(state.loading, false);
+});
 import { buildBacktestSaveRequests } from '../src/utils/backtestSave.js';
 
 const deferred = () => {

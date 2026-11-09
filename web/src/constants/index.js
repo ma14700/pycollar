@@ -12,6 +12,7 @@ export const strategyNameMap = {
   'MA5MA55CrossoverStrategy': '5/55均线交叉(多空)',
   'DualMAFixedTPSLStrategy': '20/55双均线+固定止盈止损',
   'MA20MA55RiskRewardStrategy': '20/55双均线+盈亏比优化',
+  'MA20MA55RR3Strategy': '20/55多空＋ATR止损（目标亏1赚3）',
   'MA20MA55LongOnlyStrategy': '20/55双均线交叉多（只做多）',
   'MA20MA55ShortOnlyStrategy': '20/55双均线交叉空（只做空）',
   'MA20MA144LongOnlyStrategy': '20/144金叉做多·20/55死叉离场',

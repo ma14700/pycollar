@@ -28,6 +28,23 @@ import { defaultStrategyParameters, buildStrategyParameters, pickStrategyParamet
 import { createBacktestTask } from '../src/utils/backtestTask.js';
 import { buildBacktestSaveRequests } from '../src/utils/backtestSave.js';
 
+test('ATR 3R strategy preserves independent defaults and exit switch', () => {
+    const name = 'MA20MA55RR3Strategy';
+    const defaults = defaultStrategyParameters(name);
+    const params = buildStrategyParameters(name, { ...defaults, fixed_size: 2, entry_delay_bars: 3, exit_delay_bars: 4 });
+    assert.equal(params.fast_period, 20); assert.equal(params.slow_period, 55);
+    assert.equal(params.risk_reward_ratio, 3); assert.equal(params.atr_multiplier, 2);
+    assert.equal(params.atr_period, 14); assert.equal(params.exit_on_opposite_cross, false);
+    assert.equal(params.entry_delay_bars, 3); assert.equal(params.exit_delay_bars, 4);
+    assert.equal(params.size_mode, 'fixed');
+    assert.equal(buildStrategyParameters(name, { ...defaults, exit_on_opposite_cross: true }).exit_on_opposite_cross, true);
+    assert.deepEqual(pickStrategyParameters({ exit_on_opposite_cross: false }), { exit_on_opposite_cross: false });
+    for (const key of ['atr_period','atr_multiplier','risk_reward_ratio','fixed_size']) {
+        for (const value of [0,-1,'bad']) assert.throws(() => buildStrategyParameters(name, { ...defaults, [key]: value }));
+    }
+    assert.equal(defaultStrategyParameters('MA20MA55RiskRewardStrategy').risk_reward_ratio, 2);
+});
+
 test('strategy defaults keep distinct MA periods, direction parameters and exits', () => {
     const common = { fixed_size: 3, margin_rate: .12, entry_delay_bars: 2, exit_delay_bars: 3 };
     for (const [name,fast,slow,exit] of [

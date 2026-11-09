@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Form, Input, Select, Button, Row, Col, message, Table, Modal, Tag, Radio, Switch, Tooltip, DatePicker } from 'antd';
 import { PlayCircleOutlined, LineChartOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import axios from '../../utils/api.js';
 import ChartPanel from '../../components/ChartPanel';
 import PointExitInputs from '../../components/PointExitInputs';
 import { defaultAnalysisSymbols } from '../../utils/tradingDefaults';
@@ -26,8 +26,8 @@ const SymbolScan = () => {
         const fetchData = async () => {
             try {
                 const [futuresRes, stockRes] = await Promise.all([
-                    axios.get('http://localhost:8000/api/symbols?market_type=futures'),
-                    axios.get('http://localhost:8000/api/symbols?market_type=stock')
+                    axios.get('/api/symbols?market_type=futures'),
+                    axios.get('/api/symbols?market_type=stock')
                 ]);
                 const fList = futuresRes.data.futures || [];
                 const sList = stockRes.data.stocks || [];
@@ -80,7 +80,7 @@ const SymbolScan = () => {
                 strategy_params: params
             };
 
-            const res = await axios.post('http://localhost:8000/api/strategy/scan', payload);
+            const res = await axios.post('/api/strategy/scan', payload);
             setResults(res.data.results || []);
             message.success('扫描完成');
         } catch (err) {
@@ -129,7 +129,7 @@ const SymbolScan = () => {
             // 确保日期范围合法，如果 start_date 是未来时间或不合理，可能会导致后端报错
             // 这里使用最近 365 天是安全的
 
-            const res = await axios.post('http://localhost:8000/api/backtest', payload);
+            const res = await axios.post('/api/backtest', payload);
             setDetailResult(res.data);
         } catch (err) {
             console.error(err);
