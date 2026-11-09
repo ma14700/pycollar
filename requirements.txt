@@ -1,11 +1,12 @@
-numpy
-pandas
-backtrader
-matplotlib
-akshare
-fastapi
-uvicorn
-sqlalchemy
-pydantic
-tqsdk>=3.8,<4
-python-dotenv>=1,<2
+# Direct dependencies pinned to the tested environment.
+numpy==2.5.4
+pandas==3.0.6
+backtrader==1.9.78.123
+matplotlib==3.11.2
+akshare==1.19.3
+fastapi==0.162.0
+uvicorn==0.54.0
+sqlalchemy==2.1.6
+pydantic==2.14.1
+tqsdk==3.10.4
+python-dotenv==1.2.4

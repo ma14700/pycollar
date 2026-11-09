@@ -34,7 +34,12 @@
   - `core/`: 核心回测逻辑 (Backtrader 封装)
   - `main.py`: FastAPI 接口服务
 - `web/`: 前端代码 (React)
-  - `src/App.jsx`: 主界面逻辑
+  - `src/App.jsx`: 应用入口
+  - `src/pages/`: 回测、历史、日志等业务页面
+  - `src/components/`: 图表、指标与配置组件
+  - `src/utils/`: 请求、参数和任务等共享逻辑
+- `tests/` 与 `web/tests/`: 后端、前端自动测试
+- `tools/legacy/`: 已归档的旧入口及历史排查脚本
 
 ## 启动方式
 
@@ -54,10 +59,10 @@
 
 ```bash
 # 安装依赖
-pip install -r server/requirements.txt
+python -m pip install -r requirements-lock.txt
 
 # 启动服务
-python server/main.py
+python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
 服务将在 `http://localhost:8000` 启动。
@@ -79,7 +84,7 @@ python server/main.py
 时间统一转换为北京时间。分钟线按 K 线起点加周期判断完成；日线保守地以对应日期 15:15 为完成界限，盘中不使用当日未结束日线。
 分钟线日期筛选按北京时间自然日，夜盘以图中实际时间显示。开始日期最多容许 5 个自然日的休市间隔；更大的覆盖缺口会拒绝回测。
 
-验证命令：`python -m unittest discover -s tests -v`，前端 `cd web` 后运行 `npm run build`。
+验证命令：`python -m unittest discover -s tests -v`；前端 `cd web` 后运行 `npm test` 和 `npm run build`。`npm test` 自动枚举测试文件，兼容 Windows。
 尚未配置账号时可以验证配置提示和测试；真实行情连接需要在本地填写有效凭据后验证。
 
 ### 2. 启动前端界面
@@ -97,6 +102,15 @@ npm run dev
 ```
 
 浏览器访问显示的地址 (通常是 `http://localhost:5173`)。
+
+
+### 依赖、迁移与维护
+
+当前完整依赖快照在 `requirements-lock.txt`（Windows x64、CPython 3.13），直接依赖版本在根目录 `requirements.txt`；`server/requirements.txt` 统一引用它。Windows 启动器在 Python 3.13 下使用完整快照，其他 Python 版本只安装固定直接依赖，尚未做兼容性验证。跨电脑复现建议使用 Python 3.13 与 `npm ci`，依赖健康检查用 `python -m pip check`。更新依赖时需重新运行测试后再更新快照。
+
+`python migrate_db.py --check` 只检查数据库版本；`python migrate_db.py` 先将 SQLite 备份到 `.venv/backups/`，再执行版本化的增量迁移。迁移保留已有记录并补充旧库缺少的策略名、详情列，可重复执行。服务启动也会执行必要的增量迁移；手动升级旧数据前建议先运行带备份的迁移命令。数据库版本高于程序支持版本时会拒绝启动，避免旧程序误用新数据。
+
+回测记录逻辑位于 `server/core/strategy_logging.py`，参数与成交选项校验位于 `parameters.py`，结果时间窗口过滤位于 `result_window.py`；基础策略和 3R 策略独立在 `strategy_base.py`、`strategy_rr3.py`。`strategy.py` 保留策略导出，因此原策略名称和接口继续可用。无效成交、权益时间会报错，不再静默保留到结果中。内部服务异常的详细栈记录在后端日志，接口返回操作失败说明。
 
 ## 功能特性
 

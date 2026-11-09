@@ -75,12 +75,14 @@ try {
         }
     }
 
-    & $PythonPath -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
-    if ($LASTEXITCODE -ne 0) { throw 'The project needs a working Python 3.10+ virtual environment.' }
+    & $PythonPath -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'
+    if ($LASTEXITCODE -ne 0) { throw 'Pinned dependencies need Python 3.12+. Python 3.13 is the tested and recommended version.' }
     New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
 
     $requirements = Join-Path $ProjectRoot 'server\requirements.txt'
-    $requirementsHash = Get-DependencyHash $requirements
+    & $PythonPath -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)'
+    if ($LASTEXITCODE -eq 0) { $requirements = Join-Path $ProjectRoot 'requirements-lock.txt' }
+    $requirementsHash = (Get-DependencyHash $requirements) + (Get-DependencyHash (Join-Path $ProjectRoot 'requirements.txt'))
     $pythonStamp = Join-Path $VenvRoot '.startup-requirements.sha256'
     $pythonChanged = (Test-Path -LiteralPath $pythonStamp) -and ((Get-Content -LiteralPath $pythonStamp -Raw).Trim() -ne $requirementsHash)
     & $PythonPath -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(m) for m in ['fastapi', 'uvicorn', 'sqlalchemy', 'pydantic', 'backtrader', 'pandas', 'numpy', 'matplotlib', 'akshare', 'tqsdk', 'dotenv']) else 1)"

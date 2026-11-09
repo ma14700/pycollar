@@ -45,3 +45,5 @@ class BacktestRecord(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    from .migrations import upgrade_database
+    upgrade_database(engine)

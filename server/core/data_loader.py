@@ -1,6 +1,10 @@
 import akshare as ak
 import pandas as pd
 import datetime
+import logging
+from requests.exceptions import RequestException
+
+logger = logging.getLogger(__name__)
 from .market_cache import MarketCache, is_contract
 
 def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_date=None, adjust='qfq'):
@@ -230,7 +234,8 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
                                 print(f"成功获取替代代码: {alt}")
                                 found = True
                                 break
-                        except:
+                        except (ValueError, TypeError, RequestException):
+                            logger.debug("Alternative market symbol lookup failed", exc_info=True)
                             continue
                     
                     if not found:
@@ -286,7 +291,8 @@ def fetch_futures_data(symbol='LH0', period='5', start_date=None, end_date=None,
                                 print(f"成功获取替代代码: {alt}")
                                 found = True
                                 break
-                        except:
+                        except (ValueError, TypeError, RequestException):
+                            logger.debug("Alternative market symbol lookup failed", exc_info=True)
                             continue
                     
                     if not found:

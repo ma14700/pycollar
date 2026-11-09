@@ -52,7 +52,7 @@ const MetricsPanel = ({ metrics }) => {
         <>
         {!verified && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="此结果使用旧计算口径，请重新运行回测以获得修正后的权益、回撤和单手统计。" />}
         {verified && !marginReturn && !stockReturn && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="此记录的单手收益率按旧名义金额计算，重新回测后将按开仓保证金计算。" />}
-        {verified && <div style={{ color: '#64748b', fontSize: 12, marginBottom: 16 }}>手续费统一按成交额 0.01% / 边估算，未计滑点；期货按开仓均价冻结保证金并按 K 线盯市，未模拟保证金率调整及强平。旧记录需重新回测。</div>}
+        {verified && <div style={{ color: '#64748b', fontSize: 12, marginBottom: 16 }}>手续费统一按成交额 0.01% / 边估算，未计滑点；期货按开仓均价冻结保证金并按 K 线盯市，未模拟保证金率调整及强平。成交基于 OHLC 近似撮合，无法还原根内价格先后。旧记录需重新回测。</div>}
         <Row gutter={[16, 16]}>
             {data.map(item => (
                 <Col xs={12} sm={8} md={6} lg={4} key={item.key}>

@@ -6,6 +6,10 @@ import uvicorn
 import sys
 import os
 import json
+import logging
+from requests.exceptions import RequestException
+
+logger = logging.getLogger(__name__)
 
 # 确保 core 模块可以被导入
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -13,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import akshare as ak
 import datetime
 from core.engine import BacktestEngine
+from core.errors import internal_error, unexpected_error
 from core.database import init_db, SessionLocal, BacktestRecord
 from core.history import history_page, summary_query, summary
 from core.optimizer import StrategyOptimizer
@@ -31,6 +36,7 @@ from sqlalchemy import desc
 init_db()
 
 app = FastAPI()
+app.add_exception_handler(Exception, unexpected_error)
 
 # 数据库依赖
 def get_db():
@@ -276,8 +282,8 @@ def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str
                              print(f"Quote: Found alternative {alt}")
                              fetch_symbol = alt
                              break
-                    except:
-                        pass
+                    except (ValueError, TypeError, RequestException):
+                        logger.debug("Alternative quote lookup failed", exc_info=True)
                 
                 # 如果还是没找到，回退到主力
                 if df is None or df.empty:
@@ -298,11 +304,13 @@ def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str
         }
     except HTTPException:
         raise
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"Error fetching quote: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('行情读取失败，请稍后重试') from None
 
 @app.post("/api/backtest")
 def run_backtest(request: BacktestRequest):
@@ -392,7 +400,7 @@ async def get_strategy_code():
             code = f.read()
         return {"code": code}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('策略代码读取失败，请稍后重试') from None
 
 class SaveBacktestRequest(BaseModel):
     symbol: str
@@ -435,7 +443,7 @@ def save_backtest_result(request: SaveBacktestRequest, db: Session = Depends(get
     except Exception as e:
         db.rollback()
         print(f"Save error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('回测保存失败，请稍后重试') from None
 
 @app.get("/api/backtest/list")
 def list_backtests(db: Session = Depends(get_db)):
@@ -444,7 +452,7 @@ def list_backtests(db: Session = Depends(get_db)):
         return [summary(record) for record in records]
     except Exception as e:
         print(f"List error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('历史记录读取失败，请稍后重试') from None
 
 @app.get('/api/backtest/history')
 def paged_backtests(cursor: Annotated[Optional[int], Query(gt=0)] = None,
@@ -493,7 +501,7 @@ def get_backtest_detail(record_id: int, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         print(f"Detail error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('回测详情读取失败，请稍后重试') from None
 
 @app.delete("/api/backtest/{record_id}")
 def delete_backtest(record_id: int, db: Session = Depends(get_db)):
@@ -509,7 +517,7 @@ def delete_backtest(record_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         print(f"Delete error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error('回测删除失败，请稍后重试') from None
 
 class BatchAnalyzeRequest(BaseModel):
     symbols: List[str]
