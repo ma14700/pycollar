@@ -4,6 +4,7 @@ import pandas as pd
 
 from .data_loader import fetch_data
 from .market_cache import is_contract
+from .contract_backtest import contract_window
 
 PRICE_COLUMNS = ['Open', 'High', 'Low', 'Close']
 WEIGHTS = np.array([0.15, 0.20, 0.20, 0.45])
@@ -53,7 +54,7 @@ def segment(df, mean, scale):
 
 def find_similar_candles(df, window_size=50, top_k=5, min_similarity=0,
                          continuation_bars=20, target_end=None,
-                         search_start=None, search_end=None, ma_periods=None):
+                         search_start=None, search_end=None, ma_periods=None, scope_start=None):
     if ma_periods is not None and (not isinstance(ma_periods, (list, tuple)) or
             any(type(period) is not int or period not in COMPARISON_MA_PERIODS for period in ma_periods)):
         raise ValueError('辅助对比均线仅支持 MA20、MA60、MA144')
@@ -94,8 +95,8 @@ def find_similar_candles(df, window_size=50, top_k=5, min_similarity=0,
         raise ValueError('历史搜索开始时间不能晚于结束时间')
     target_stop = len(df) if cutoff is None else int(df.index.searchsorted(cutoff, side='right'))
     target_start = target_stop - window_size
-    if target_start < 0:
-        raise ValueError(f'基准结束时间之前不足 {window_size} 根 K 线，请缩小根数或调整时间')
+    if target_start < 0 or (scope_start is not None and target_start < len(df) and df.index[target_start] < boundary(scope_start)):
+        raise ValueError(f'分析范围内基准结束时间之前不足 {window_size} 根 K 线，请缩小根数或调整时间')
     # Keep continuation wholly before the target; exclude the target itself.
     last_start = target_start - window_size - continuation_bars
     if last_start < 0:
@@ -183,24 +184,30 @@ def find_similar_candles(df, window_size=50, top_k=5, min_similarity=0,
     }
 
 
-def compare_market_candles(symbol, period='daily', data_provider='tqsdk', data_source='main', **parameters):
+def compare_market_candles(symbol, period='daily', data_provider='tqsdk', data_source='main', synthesize_60=False, **parameters):
     explicit_contract = is_contract(symbol)
     if explicit_contract and (data_provider != 'tqsdk' or data_source != 'main'):
         raise ValueError('具体合约对比须使用天勤行情和具体合约口径')
     # The legacy loader may silently replace minute/weighted data. Do not allow
     # those ambiguous combinations in the shape-comparison feature.
-    if data_provider == 'akshare' and (period != 'daily' or data_source != 'main'):
+    if data_provider == 'akshare' and ((period != 'daily' and not (period == '60' and synthesize_60)) or data_source != 'main'):
         raise ValueError('原有来源在 K 线对比中仅支持主力连续日线；分钟线或加权指数请选择天勤')
+    window = contract_window(symbol[-4:]) if explicit_contract else None
     df = fetch_data(symbol, period=period, market_type='futures',
                     data_provider=data_provider, data_source=data_source,
-                    **({'cache_contract': True} if explicit_contract else {}))
+                    **({'cache_contract': True} if explicit_contract else {}),
+                    **({'synthesize_60': True, **({'required_start_date': window['start_date']} if window else {})} if synthesize_60 and period == '60' else {}))
     if df is None or df.empty:
         raise ValueError('未获取到行情，请检查品种、网络或天勤配置')
     df = df.sort_index().tail(10000).copy()
-    if data_provider == 'akshare':
+    if data_provider == 'akshare' and period == 'daily':
         now = pd.Timestamp.now(tz='Asia/Shanghai').tz_localize(None)
         df = df[df.index.normalize() + pd.Timedelta(hours=15, minutes=15) <= now]
+    if window:
+        parameters = {**parameters, 'target_end': window['end_date'], 'search_start': window['start_date'],
+                      'search_end': window['end_date'], 'scope_start': window['start_date']}
     result = find_similar_candles(df, **parameters)
+    result['analysis_window'] = {'start': window['start_date'], 'end': window['end_date']} if window else None
     result['data_info'] = {
         **df.attrs.get('data_info', {}), 'provider': data_provider,
         'provider_name': '天勤 TqSdk 免费版' if data_provider == 'tqsdk' else '新浪财经',

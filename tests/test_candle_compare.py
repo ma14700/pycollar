@@ -220,7 +220,9 @@ class CandleCompareTests(unittest.TestCase):
         self.assertEqual(result['data_info']['provider'], 'tqsdk')
 
     def test_specific_contract_uses_its_own_cached_series_without_continuous_fallback(self):
-        with patch('core.candle_compare.fetch_data', return_value=sample()) as fetch:
+        prices = sample()
+        prices.index = pd.date_range('2026-07-01', periods=len(prices))
+        with patch('core.candle_compare.fetch_data', return_value=prices) as fetch:
             result = compare_market_candles('JM2701', period='5', window_size=10)
         self.assertEqual(fetch.call_args.args[0], 'JM2701')
         self.assertTrue(fetch.call_args.kwargs['cache_contract'])
@@ -230,6 +232,33 @@ class CandleCompareTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '具体合约对比'):
                     compare_market_candles('SA2701', data_provider=provider, data_source=source)
             fetch.assert_not_called()
+
+    def test_contract_windows_bound_target_matches_and_following_with_ma_warmup(self):
+        rng = np.random.default_rng(123)
+        dates = pd.date_range('2025-06-01', '2027-02-01')
+        close = 100 + np.cumsum(rng.normal(0, .2, len(dates)))
+        df = pd.DataFrame({'Open':close, 'High':close+1, 'Low':close-1, 'Close':close}, index=dates)
+        with patch('core.candle_compare.fetch_data', return_value=df):
+            for symbol, start, end in [('JM2605','2025-12-01','2026-04-23'), ('JM2701','2026-08-01','2026-12-23')]:
+                with self.subTest(symbol=symbol):
+                    result = compare_market_candles(symbol, window_size=20, continuation_bars=10, ma_periods=[144],
+                                                    target_end='2027-01-15', search_start='2025-01-01', search_end='2027-01-15')
+                    self.assertEqual(result['analysis_window'], {'start':start,'end':end})
+                    self.assertTrue(result['matches'])
+                    self.assertEqual(result['target']['end'][:10], end)
+                    self.assertGreaterEqual(result['target']['start'][:10], start)
+                    for match in result['matches']:
+                        self.assertGreaterEqual(match['start'][:10], start)
+                        self.assertLessEqual(match['end'][:10], end)
+                        self.assertLessEqual(match['following']['end'][:10], end)
+                        self.assertIsNotNone(match['ma']['ma144'][0])
+
+    def test_contract_does_not_use_pre_window_candles_for_target(self):
+        prices = sample()
+        prices.index = pd.date_range('2025-07-01', periods=len(prices))
+        with patch('core.candle_compare.fetch_data', return_value=prices):
+            with self.assertRaisesRegex(ValueError, '分析范围内'):
+                compare_market_candles('JM2605', window_size=50)
 
     def test_ambiguous_legacy_minute_or_index_is_rejected(self):
         with patch('core.candle_compare.fetch_data') as fetch:

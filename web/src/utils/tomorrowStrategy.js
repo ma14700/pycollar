@@ -28,12 +28,12 @@ export const tomorrowStrategyOptions = [
 export const strategyParameterKeys = [...new Set(tomorrowStrategyOptions.flatMap(option => Object.keys(option.defaults)))];
 
 export function buildTomorrowAnalysisRequest(values) {
-    const { symbols, market_type, period, strategy_name, data_provider, data_source, contract_month, ...parameters } = values;
+    const { symbols, market_type, period, strategy_name, data_provider, data_source, contract_month, synthesize_60, ...parameters } = values;
     const contracts = normalizeContractMonths(contract_month);
     return {
         symbols: analysisSymbols(symbols, contracts, market_type), market_type, period, strategy_name,
         data_provider: contracts.length ? 'tqsdk' : data_provider || (market_type === 'stock' ? 'akshare' : 'tqsdk'),
-        data_source: contracts.length ? 'main' : data_source || 'main',
+        data_source: contracts.length ? 'main' : data_source || 'main', synthesize_60: synthesize_60 || false,
         strategy_params: Object.fromEntries(Object.entries(parameters).filter(([, value]) => value !== '' && value !== null && value !== undefined)),
     };
 }

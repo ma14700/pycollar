@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Form, Select } from 'antd';
+import { Alert, Form, Select, Switch } from 'antd';
 import axios from '../utils/api.js';
 
 const DataProviderSelect = ({ form, onChange, disabled = false }) => {
@@ -20,6 +20,9 @@ const DataProviderSelect = ({ form, onChange, disabled = false }) => {
                 { value: 'akshare', label: market === 'stock' ? '原有来源（东方财富 / 新浪）' : '新浪财经（原有来源）' },
                 { value: 'tqsdk', label: '天勤 TqSdk 免费版', disabled: market !== 'futures' },
             ]} />
+        </Form.Item>
+        <Form.Item name="synthesize_60" label="60分钟线按交易时段合成" valuePropName="checked" initialValue={false} extra="使用5分钟行情合成；仅在选择60分钟周期时生效，历史范围受底层数据限制。">
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
         </Form.Item>
         {provider === 'tqsdk' && <Alert
             type={status && (!status.configured || !status.installed) ? 'warning' : 'info'}

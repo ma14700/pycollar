@@ -33,7 +33,7 @@ class BacktestEngine:
     def _filter_params(self, StrategyClass, params):
         return filter_strategy_params(StrategyClass, params)
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None, daily_history_start=None):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None, daily_history_start=None, synthesize_60=False):
         strategy_params = strategy_params.copy()
         contract_info = None
         try:
@@ -111,7 +111,8 @@ class BacktestEngine:
             strategy_params['end_date'] = end_date # 注入结束日期，用于强制平仓
 
             df_raw = fetch_data(symbol=symbol, period=period, market_type=market_type, start_date=fetch_start_date, end_date=end_date, data_source=data_source, data_provider=data_provider,
-                                cache_contract=True, required_start_date=start_date)
+                                cache_contract=True, required_start_date=start_date,
+                                **({'synthesize_60': True} if synthesize_60 and period == '60' else {}))
             if df_raw is not None:
                 df_raw = df_raw.copy()
                 if contract_info:
@@ -481,7 +482,7 @@ class BacktestEngine:
 
     def analyze_detail(self, symbol, period, strategy_params, strategy_name='TrendFollowingStrategy',
                        market_type='futures', data_provider='akshare', data_source='main',
-                       start_date=None, as_of=None, history_start=None, daily_history_start=None):
+                       start_date=None, as_of=None, history_start=None, daily_history_start=None, synthesize_60=False):
         """Use the backtest executor without liquidating a live strategy at the data boundary."""
         params = strategy_params.copy()
         params['disable_auto_close'] = True
@@ -493,13 +494,13 @@ class BacktestEngine:
         result = self.run(symbol=symbol, period=period, strategy_params=params,
                           initial_cash=10000000.0, start_date=start_date,
                           strategy_name=strategy_name, market_type=market_type,
-                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start, daily_history_start=daily_history_start)
+                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start, daily_history_start=daily_history_start, synthesize_60=synthesize_60)
         if 'error' not in result:
             result['analysis_request'] = {
                 'symbol': symbol, 'period': period, 'market_type': market_type,
                 'strategy_name': strategy_name, 'strategy_params': {
                     **result['strategy_info']['params'], **execution_delay_params(params), **execution_options(params)},
-                'data_provider': data_provider, 'data_source': data_source,
+                'data_provider': data_provider, 'data_source': data_source, 'synthesize_60': synthesize_60,
                 'start_date': start_date, 'as_of': result['data_info']['end'],
                 'history_start': result['execution_info']['history_start'],
                 **({'daily_history_start': result['data_info']['daily_macd_history_start']} if result['data_info'].get('daily_macd_history_start') else {}),
@@ -507,12 +508,12 @@ class BacktestEngine:
         return result
 
     def analyze_batch(self, symbols, period, strategy_params, strategy_name='TrendFollowingStrategy',
-                      market_type='futures', data_provider='akshare', data_source='main'):
+                      market_type='futures', data_provider='akshare', data_source='main', synthesize_60=False):
         results = []
         for symbol in symbols:
             try:
                 detail = self.analyze_detail(symbol, period, strategy_params,
-                                             strategy_name, market_type, data_provider, data_source)
+                                             strategy_name, market_type, data_provider, data_source, synthesize_60=synthesize_60)
                 if 'error' in detail:
                     raise ValueError(detail['error'])
                 results.append({

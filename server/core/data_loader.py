@@ -111,7 +111,18 @@ def fetch_stock_data(symbol='sh600000', period='daily', start_date=None, end_dat
         return None
 
 def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_date=None, data_source='main', data_provider='akshare',
-               cache_contract=False, required_start_date=None):
+               cache_contract=False, required_start_date=None, synthesize_60=False):
+    if synthesize_60 and period == '60':
+        from .synthetic_hour import synthesize_hour
+        source = fetch_data(symbol, period='5', market_type=market_type, start_date=start_date,
+                            end_date=end_date, data_source=data_source, data_provider=data_provider,
+                            cache_contract=cache_contract, required_start_date=required_start_date)
+        required = required_start_date or start_date
+        if required and source is not None and not source.empty:
+            first = pd.Timestamp(source.index.min()).tz_localize(None)
+            if first > pd.Timestamp(required).tz_localize(None) + pd.Timedelta(days=7) and not source.attrs.get('data_info', {}).get('history_complete'):
+                raise ValueError(f'合成60分钟线的5分钟行情不足：需要覆盖 {required}，当前最早为 {first}。请缩短时间范围或切换原始60分钟线')
+        return synthesize_hour(source, symbol, market_type, data_provider)
     use_cache = cache_contract and is_contract(symbol, market_type, data_source)
     if data_provider == 'tqsdk':
         if market_type != 'futures':

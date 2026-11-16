@@ -170,21 +170,22 @@ def optimize_cross_horizons(df, pairs, start=None, end=None, observation_delay=0
     return output
 
 
-def market_cross_probability(symbol, period, data_provider, data_source, pairs, start=None, end=None, observation_bars=None, observation_delay=0, optimize=False, max_search_bars=200, reverse_exit=False):
+def market_cross_probability(symbol, period, data_provider, data_source, pairs, start=None, end=None, observation_bars=None, observation_delay=0, optimize=False, max_search_bars=200, reverse_exit=False, synthesize_60=False):
     contract = is_contract(symbol)
     if contract and (data_provider != 'tqsdk' or data_source != 'main'):
         raise ValueError('具体合约须使用天勤行情和具体合约口径')
     window = contract_window(symbol[-4:]) if contract else None
     if window:
         start, end = window['start_date'], window['end_date']
-    if data_provider == 'akshare' and (period != 'daily' or data_source != 'main'):
+    if data_provider == 'akshare' and ((period != 'daily' and not (period == '60' and synthesize_60)) or data_source != 'main'):
         raise ValueError('原有来源仅支持主力连续日线')
     df = fetch_data(symbol, period=period, market_type='futures', data_provider=data_provider,
-                    data_source=data_source, **({'cache_contract': True} if contract else {}))
+                    data_source=data_source, **({'cache_contract': True} if contract else {}),
+                    **({'synthesize_60': True, **({'required_start_date': start} if start else {})} if synthesize_60 and period == '60' else {}))
     if df is None or df.empty:
         raise ValueError('未获取到行情，请检查品种、网络或天勤配置')
     df = _normalized_frame(df).tail(10000).copy()
-    if data_provider == 'akshare':
+    if data_provider == 'akshare' and period == 'daily':
         now = pd.Timestamp.now(tz='Asia/Shanghai').tz_localize(None)
         df = df[df.index.normalize() + pd.Timedelta(hours=15, minutes=15) <= now]
     groups = analyze_crosses(df, pairs, start, end, observation_bars, observation_delay, reverse_exit)

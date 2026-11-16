@@ -66,6 +66,7 @@ export default function CandleAssistPage() {
     const [bestEventIndex, setBestEventIndex] = useState(0);
     const request = useRef(null);
     const provider = Form.useWatch('data_provider', form) || 'tqsdk';
+    const synthesize60 = Form.useWatch('synthesize_60', form) || false;
     const period = Form.useWatch('period', form) || '60';
     const months = Form.useWatch('contract_month', form) || [];
     useEffect(() => {
@@ -76,6 +77,7 @@ export default function CandleAssistPage() {
         return () => { controller.abort(); request.current?.abort(); };
     }, [form]);
     useEffect(() => { if (provider === 'akshare') form.setFieldsValue({period:'daily',data_source:'main'}); }, [provider, form]);
+    useEffect(() => { if (provider === 'akshare' && !synthesize60 && form.getFieldValue('period') === '60') form.setFieldValue('period','daily'); }, [provider, synthesize60, form]);
 
     const run = async (values, optimize = false) => {
         request.current?.abort();
@@ -83,7 +85,7 @@ export default function CandleAssistPage() {
         setLoading(true); setRuns([]); setActive(''); setDetail(null); setBestDetail(null); setPairFilter('all'); setDirectionFilter('all'); setOptimizationKey('');
         try {
             const payload = { symbol:values.symbol, period:values.period, data_provider:values.data_provider || 'tqsdk',
-                data_source:values.data_source, pairs:values.pairs, observation_bars:optimize ? null : values.observation_bars ?? null, observation_delay:values.observation_delay ?? 0, reverse_exit:values.reverse_exit ?? false,
+                data_source:values.data_source, synthesize_60:values.synthesize_60 || false, pairs:values.pairs, observation_bars:optimize ? null : values.observation_bars ?? null, observation_delay:values.observation_delay ?? 0, reverse_exit:values.reverse_exit ?? false,
                 optimize, max_search_bars:values.max_search_bars ?? 200,
                 start:values.range?.[0]?.format('YYYY-MM-DD'), end:values.range?.[1]?.format('YYYY-MM-DD') };
             const next = [];
@@ -148,7 +150,7 @@ export default function CandleAssistPage() {
                     <Col xs={24} md={12} xl={8}><DataProviderSelect form={form} disabled={months.length>0}/></Col>
                     <Col xs={24} md={12} xl={8}><Form.Item name="symbol" label="交易品种" rules={[{required:true,message:'请选择交易品种'}]}><Select showSearch optionFilterProp="label" options={symbols.map(item=>({value:item.code,label:item.name}))}/></Form.Item>
                         <Form.Item name="data_source" label="合约口径"><Select disabled={provider==='akshare'||months.length>0} options={[{value:'main',label:months.length?'具体合约':'主力连续'},{value:'weighted',label:'加权指数'}]}/></Form.Item></Col>
-                    <Col xs={24} md={12} xl={8}><Form.Item name="period" label="K线周期"><Select disabled={provider==='akshare'} options={[{value:'daily',label:'日线'},...['1','5','15','30','60'].map(value=>({value,label:`${value}分钟`}))]}/></Form.Item>
+                    <Col xs={24} md={12} xl={8}><Form.Item name="period" label="K线周期"><Select disabled={provider==='akshare'&&!synthesize60} options={[{value:'daily',label:'日线'},...(provider==='akshare' ? ['60'] : ['1','5','15','30','60']).map(value=>({value,label:`${value}分钟`}))]}/></Form.Item>
                         {months.length ? <Form.Item label="分析时间范围"><Typography.Text type="secondary">具体合约按策略回测的合约窗口分别分析，清空合约后可自选时间。</Typography.Text></Form.Item> : <Form.Item name="range" label="分析时间范围（可选）"><DatePicker.RangePicker style={{width:'100%'}}/></Form.Item>}</Col>
                 </Row>
                 <ContractMonthSelect form={form} disabled={loading}/>

@@ -300,7 +300,7 @@ const BacktestPage = () => {
               const symbolObj = symbols.find(item => item.code === target.base_symbol);
               let payload = {
                   symbol: target.base_symbol, period: values.period, market_type: values.market_type || 'futures',
-                  data_source: values.data_source || 'main',
+                  data_source: values.data_source || 'main', synthesize_60: values.synthesize_60 || false,
                   data_provider: values.data_provider || (values.market_type === 'stock' ? 'akshare' : 'tqsdk'),
                   strategy_name: name, strategy_params: { ...params, contract_multiplier: symbolObj?.multiplier || values.contract_multiplier || 1 },
                   initial_cash: Number(values.initial_cash || 1000000), auto_optimize: isFixedMA144Strategy(name) || isMA55144Strategy(name) || ['MA20MA60DailyMACDStrategy','MA20MA55RR3Strategy'].includes(name) ? false : autoOptimize,

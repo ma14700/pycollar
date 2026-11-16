@@ -8,6 +8,7 @@ import DataSourceInfo from '../../components/DataSourceInfo';
 import ContractMonthSelect from '../../components/ContractMonthSelect';
 import { defaultTradingSymbol } from '../../utils/tradingDefaults';
 import { buildContractComparisons } from '../../utils/contractAnalysis';
+import { contractWindow } from '../../utils/contractBacktest';
 import { buildCandleOption, buildOverlayOption } from '../../utils/candleCompareCharts';
 import { buildFollowingDetails } from '../../utils/candleFollowingDetails';
 
@@ -33,6 +34,7 @@ const CandleComparePage = () => {
     const [detailMatch, setDetailMatch] = useState(null);
     const request = useRef(null);
     const provider = Form.useWatch('data_provider', form) || 'tqsdk';
+    const synthesize60 = Form.useWatch('synthesize_60', form) || false;
     const period = Form.useWatch('period', form) || 'daily';
     const selected = result?.matches.find(item => item.rank === selectedRank);
     const comparedMAs = result?.parameters.ma_periods || [];
@@ -66,6 +68,7 @@ const CandleComparePage = () => {
     useEffect(() => {
         if (provider === 'akshare') form.setFieldsValue({ period: 'daily', data_source: 'main' });
     }, [provider, form]);
+    useEffect(() => { if (provider === 'akshare' && !synthesize60 && form.getFieldValue('period') === '60') form.setFieldValue('period','daily'); }, [provider, synthesize60, form]);
 
     const runComparison = async values => {
         request.current?.abort();
@@ -79,13 +82,13 @@ const CandleComparePage = () => {
         const format = values.period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss';
         const payload = {
             symbol: values.symbol, period: values.period,
-            data_provider: values.data_provider || 'tqsdk', data_source: values.data_source,
+            data_provider: values.data_provider || 'tqsdk', data_source: values.data_source, synthesize_60: values.synthesize_60 || false,
             window_size: values.window_size, top_k: values.top_k,
             min_similarity: values.min_similarity, continuation_bars: values.continuation_bars,
             ma_periods: values.ma_periods || [],
-            target_end: values.target_end?.format(format),
-            search_start: values.search_range?.[0]?.format(format),
-            search_end: values.search_range?.[1]?.format(format),
+            target_end: contractMode ? undefined : values.target_end?.format(format),
+            search_start: contractMode ? undefined : values.search_range?.[0]?.format(format),
+            search_end: contractMode ? undefined : values.search_range?.[1]?.format(format),
         };
         try {
             const runs = [];
@@ -148,9 +151,9 @@ const CandleComparePage = () => {
                         <Form.Item name="data_source" label="合约口径"><Select disabled={provider === 'akshare' || contractMode} options={[{ value: 'main', label: contractMode ? '具体合约' : '主力连续' }, { value: 'weighted', label: '加权指数' }]} /></Form.Item>
                     </Col>
                     <Col xs={24} md={12} xl={6}>
-                        <Form.Item name="period" label="K线周期"><Select disabled={provider === 'akshare'} options={[{ value: 'daily', label: '日线' }, ...['1', '5', '15', '30', '60'].map(value => ({ value, label: `${value}分钟` }))]} /></Form.Item>
+                        <Form.Item name="period" label="K线周期"><Select disabled={provider === 'akshare' && !synthesize60} options={[{ value: 'daily', label: '日线' }, ...(provider === 'akshare' ? ['60'] : ['1', '5', '15', '30', '60']).map(value => ({ value, label: `${value}分钟` }))]} /></Form.Item>
                         <Form.Item name="target_end" label="基准结束时间（可选）" tooltip="留空使用最近已完成的 K 线；指定时间则截取截至该时间的固定根数。">
-                            <DatePicker showTime={period !== 'daily'} format={period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss'} placeholder="最近已完成 K 线" style={{ width: '100%' }} />
+                            <DatePicker disabled={contractMode} showTime={period !== 'daily'} format={period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss'} placeholder="最近已完成 K 线" style={{ width: '100%' }} />
                         </Form.Item>
                     </Col>
                     <Col xs={24} md={12} xl={6}>
@@ -159,11 +162,12 @@ const CandleComparePage = () => {
                     </Col>
                 </Row>
                 <ContractMonthSelect form={form} disabled={loading} />
+                {contractMode && <Alert type="info" showIcon style={{marginBottom:16}} message="具体合约按策略回测时间窗口对比" description={<>{contractMonths.map(month=>{const window=contractWindow(month); return <div key={month}>{month}：{window.start_date} ～ {window.end_date}</div>;})}<div>基准、历史片段及后续观察均限定在窗口内；窗口之前的行情仅用于均线预热。</div></>}/>}
                 <Form.Item name="ma_periods" label="均线辅助对比（可多选）" extra="可单选或全选；不选时仅比较 K 线形态。选中后，K 线占评分的 50%，所选均线合计占 50%，并显示在叠加图与两组 K 线图中。">
                     <Checkbox.Group options={[20, 60, 144].map(value => ({ value, label: `配合 ${value}${period === 'daily' ? '日线' : '周期均线'}对比` }))} />
                 </Form.Item>
                 <Row gutter={20} align="bottom">
-                    <Col xs={24} md={12}><Form.Item name="search_range" label="历史搜索范围（可选）"><RangePicker showTime={period !== 'daily'} format={period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss'} style={{ width: '100%' }} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="search_range" label="历史搜索范围（可选）"><RangePicker disabled={contractMode} showTime={period !== 'daily'} format={period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH:mm:ss'} style={{ width: '100%' }} /></Form.Item></Col>
                     <Col xs={12} md={4}><Form.Item name="min_similarity" label="最低相似度（分）" rules={[{ required: true }]}><InputNumber min={0} max={100} style={{ width: '100%' }} /></Form.Item></Col>
                     <Col xs={12} md={4}><Form.Item name="top_k" label="返回数量" rules={[{ required: true }]}><InputNumber min={1} max={20} precision={0} style={{ width: '100%' }} /></Form.Item></Col>
                     <Col xs={24} md={4}><Form.Item><Button type="primary" htmlType="submit" loading={loading} icon={<SearchOutlined />} block>查找相似走势</Button></Form.Item></Col>
@@ -177,6 +181,7 @@ const CandleComparePage = () => {
         {error && <Alert type="error" showIcon message="无法完成对比" description={error} />}
         {result ? <>
             <DataSourceInfo info={result.data_info} />
+            {result.analysis_window && <Alert type="info" showIcon message={`合约对比窗口：${result.analysis_window.start} ～ ${result.analysis_window.end}`} />}
             <Card title="历史相似走势排名" extra={<Typography.Text type="secondary">基准：{result.target.start} ～ {result.target.end}</Typography.Text>}>
                 <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
                     <Col xs={12} md={6}><Statistic title="基准 K 线数" value={result.target.bars} /></Col>

@@ -69,6 +69,7 @@ class BacktestRequest(BaseModel):
     data_source: str = "main" # 数据来源: main (主力), weighted (加权/指数)
     data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
     contract_month: Optional[str] = Field(default=None, pattern=r'^\d{2}(0[1-9]|1[0-2])$')
+    synthesize_60: bool = False
 
 
 @app.get('/api/data/providers')
@@ -117,6 +118,7 @@ class CandleCompareRequest(BaseModel):
     target_end: Optional[str] = None
     search_start: Optional[str] = None
     search_end: Optional[str] = None
+    synthesize_60: bool = False
 
 
 class CrossProbabilityRequest(BaseModel):
@@ -132,6 +134,7 @@ class CrossProbabilityRequest(BaseModel):
     max_search_bars: int = Field(default=200, strict=True, ge=1, le=1000)
     start: Optional[str] = None
     end: Optional[str] = None
+    synthesize_60: bool = False
 
 
 @app.post('/api/candles/cross-probability')
@@ -363,7 +366,7 @@ def run_backtest(request: BacktestRequest):
         strategy_name=request.strategy_name,
         data_source=request.data_source,
         data_provider=request.data_provider,
-        contract_month=request.contract_month
+        contract_month=request.contract_month, synthesize_60=request.synthesize_60
     )
     
     if "error" in result:
@@ -394,7 +397,7 @@ def run_backtest(request: BacktestRequest):
             market_type=request.market_type,
             initial_cash=request.initial_cash,
             contract_month=request.contract_month,
-            baseline_result=result
+            baseline_result=result, synthesize_60=request.synthesize_60
         )
         if best_res:
              optimized_result = best_res
@@ -554,6 +557,8 @@ class BatchAnalyzeRequest(BaseModel):
     strategy_name: str = "TrendFollowingStrategy"
     data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
     data_source: Literal['main', 'weighted'] = 'main'
+    synthesize_60: bool = False
+
 
 @app.post("/api/strategy/batch-analyze")
 def batch_analyze(request: BatchAnalyzeRequest):
@@ -565,7 +570,7 @@ def batch_analyze(request: BatchAnalyzeRequest):
         strategy_name=request.strategy_name,
         market_type=request.market_type,
         data_provider=request.data_provider,
-        data_source=request.data_source
+        data_source=request.data_source, synthesize_60=request.synthesize_60
     )
     return {"results": results}
 
@@ -581,6 +586,7 @@ class StrategyDetailRequest(BaseModel):
     as_of: Optional[str] = None
     history_start: Optional[str] = None
     daily_history_start: Optional[str] = None
+    synthesize_60: bool = False
 
 
 @app.post('/api/strategy/detail')
