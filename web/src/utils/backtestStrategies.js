@@ -6,15 +6,16 @@ export const strategyOptions = Object.entries({ ...Object.fromEntries(tomorrowSt
 export const strategyParameterKeys = ['fast_period','slow_period','exit_period','ma_period','macd_fast','macd_slow','macd_signal','dkx_period','dkx_ma_period','atr_period','atr_multiplier','size_mode','risk_per_trade','equity_percent','take_profit_points','stop_loss_points','sl_mode','sl_value','tp_mode','tp_value','ma_type','risk_reward_ratio','allow_reverse','use_expma','exit_on_opposite_cross'];
 export const pickStrategyParameters = values => Object.fromEntries(strategyParameterKeys.filter(key => values[key] !== undefined).map(key => [key,values[key]]));
 export const isFixedMA144Strategy = name => Boolean(getMA144ExitStrategy(name)) || ['MA20MA144LongOnlyStrategy','MA20MA144ShortOnlyStrategy','MA20MA144LongShortStrategy'].includes(name);
+export const isMA55144Strategy = name => ['MA55MA144CrossoverStrategy','MA55MA144LongOnlyStrategy','MA55MA144ShortOnlyStrategy'].includes(name);
 export function defaultStrategyParameters(name) {
     const option = tomorrowStrategyOptions.find(item => item.value === name);
     return { atr_period:14,atr_multiplier:3,risk_per_trade:.02,equity_percent:.1,size_mode:'fixed',
-        ...(option?.defaults || {fast_period:20,slow_period:144,exit_period:55}) };
+        ...(option?.defaults || (isMA55144Strategy(name) ? {fast_period:55,slow_period:144} : {fast_period:20,slow_period:144,exit_period:55})) };
 }
 export function buildStrategyParameters(strategyType, values) {
     const isMA144SignalStrategy = isFixedMA144Strategy(strategyType);
     const ma144ExitPeriod = getMA144ExitStrategy(strategyType) ? 144 : 55;
-    const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy','MA20MA55ShortOnlyStrategy'].includes(strategyType);
+    const isDirectionalMA55Strategy = ['MA20MA55LongOnlyStrategy','MA20MA55ShortOnlyStrategy','MA55MA144LongOnlyStrategy','MA55MA144ShortOnlyStrategy'].includes(strategyType);
       let params = {};
       const riskPerTrade = values.risk_per_trade !== undefined ? parseFloat(values.risk_per_trade) : 0.02;
       const equityPercent = values.equity_percent !== undefined ? parseFloat(values.equity_percent) : 0.1;
@@ -78,10 +79,10 @@ export function buildStrategyParameters(strategyType, values) {
             contract_multiplier: contractMultiplier,
             weak_threshold: 7.0
         };
-      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PointExitStrategy' || isDirectionalMA55Strategy || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
+      } else if (strategyType === 'MA20MA55CrossoverStrategy' || strategyType === 'MA20MA55PointExitStrategy' || isDirectionalMA55Strategy || isMA55144Strategy(strategyType) || strategyType === 'StockMA20MA55LongOnlyStrategy' || strategyType === 'MA20MA60CrossoverStrategy') {
         params = {
-            fast_period: values.fast_period ? parseInt(values.fast_period) : 20,
-            slow_period: values.slow_period ? parseInt(values.slow_period) : strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
+            fast_period: values.fast_period ? parseInt(values.fast_period) : isMA55144Strategy(strategyType) ? 55 : 20,
+            slow_period: values.slow_period ? parseInt(values.slow_period) : isMA55144Strategy(strategyType) ? 144 : strategyType === 'MA20MA60CrossoverStrategy' ? 60 : 55,
             atr_period: 14,
             atr_multiplier: values.atr_multiplier ? parseFloat(values.atr_multiplier) : 3.0,
             risk_per_trade: riskPerTrade,
@@ -199,7 +200,14 @@ export function buildStrategyParameters(strategyType, values) {
         };
       }
 
-      if (isDirectionalMA55Strategy) params.size_mode = 'fixed';
+      if (isDirectionalMA55Strategy || isMA55144Strategy(strategyType)) params.size_mode = 'fixed';
+      if (isMA55144Strategy(strategyType)) {
+          params.fast_period = Number(values.fast_period ?? 55);
+          params.slow_period = Number(values.slow_period ?? 144);
+          if (!Number.isInteger(params.fast_period) || !Number.isInteger(params.slow_period) || params.fast_period <= 0 || params.fast_period >= params.slow_period) {
+              throw new Error('均线周期必须为正整数，且快线周期须小于慢线周期');
+          }
+      }
       if (strategyType === 'MA20MA55RR3Strategy') {
           params.size_mode = 'fixed';
           params.exit_on_opposite_cross = values.exit_on_opposite_cross ?? false;

@@ -7,6 +7,7 @@ import LogsPage from '../pages/Logs';
 import HistoryPage from '../pages/History';
 import TomorrowStrategyPage from '../pages/TomorrowStrategy';
 import CandleComparePage from '../pages/CandleCompare';
+import CandleAssistPage from '../pages/CandleAssist';
 import RecentNewsPage from '../pages/RecentNews';
 import SymbolScanPage from '../pages/SymbolScan';
 
@@ -46,6 +47,10 @@ const router = createBrowserRouter([
       {
         path: 'candle-compare',
         element: <CandleComparePage />,
+      },
+      {
+        path: 'candle-assist',
+        element: <CandleAssistPage />,
       },
       {
         path: 'recent-news',

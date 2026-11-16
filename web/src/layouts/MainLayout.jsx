@@ -34,6 +34,7 @@ const MainLayout = () => {
     if (path === '/logs') return '3';
     if (path === '/history') return '4';
     if (path === '/candle-compare') return '6';
+    if (path === '/candle-assist') return '9';
     if (path === '/recent-news') return '7';
     return '1';
   };
@@ -63,6 +64,9 @@ const MainLayout = () => {
         break;
       case '8':
         navigate('/symbol-scan');
+        break;
+      case '9':
+        navigate('/candle-assist');
         break;
       default:
         navigate('/backtest');
@@ -109,6 +113,7 @@ const MainLayout = () => {
                         { key: '3', icon: <FileTextOutlined />, label: '交易日志' },
                         { key: '4', icon: <HistoryOutlined />, label: '回测记录' },
                         { key: '6', icon: <FundViewOutlined />, label: 'K线对比' },
+                        { key: '9', icon: <LineChartOutlined />, label: 'K线辅助' },
                         { key: '7', icon: <ReadOutlined />, label: '近期消息' }
                     ]}
                 />

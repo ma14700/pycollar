@@ -26,6 +26,7 @@ from core.tq_provider import provider_status, fetch_tq_quote, fetch_tq_contracts
 from core.market_cache import MarketCache, ResourceValue
 from core.contract_backtest import contract_scope
 from core.candle_compare import compare_market_candles
+from core.cross_probability import market_cross_probability
 from core.recent_news import get_recent_news
 from core.jin10_mcp import status as jin10_mcp_status
 from core.market_quotes import get_market_quotes
@@ -116,6 +117,32 @@ class CandleCompareRequest(BaseModel):
     target_end: Optional[str] = None
     search_start: Optional[str] = None
     search_end: Optional[str] = None
+
+
+class CrossProbabilityRequest(BaseModel):
+    symbol: str = Field(min_length=2, max_length=24)
+    period: Literal['daily', '1', '5', '15', '30', '60'] = 'daily'
+    data_provider: Literal['akshare', 'tqsdk'] = 'tqsdk'
+    data_source: Literal['main', 'weighted'] = 'main'
+    pairs: List[Literal['20/55', '20/144', '55/144']] = Field(min_length=1, max_length=3)
+    observation_bars: Optional[int] = Field(default=None, strict=True, ge=1, le=10000)
+    observation_delay: int = Field(default=0, strict=True, ge=0, le=10000)
+    reverse_exit: bool = False
+    optimize: bool = False
+    max_search_bars: int = Field(default=200, strict=True, ge=1, le=1000)
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+@app.post('/api/candles/cross-probability')
+def cross_probability(request: CrossProbabilityRequest):
+    try:
+        return market_cross_probability(**request.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    except Exception:
+        logger.exception('Cross probability calculation failed')
+        raise HTTPException(status_code=502, detail='行情分析暂时失败，请检查数据源或稍后重试') from None
 
 
 @app.post('/api/candles/compare')

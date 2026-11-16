@@ -169,6 +169,35 @@ class MA20MA55ShortOnlyStrategy(MA20MA55LongOnlyStrategy):
             self.order = self.sell(size=self.params.fixed_size)
 
 
+def _validate_55_144_periods(cls, params):
+    fast = params.get('fast_period', cls.params.fast_period)
+    slow = params.get('slow_period', cls.params.slow_period)
+    if fast >= slow:
+        raise ValueError('快均线周期必须小于慢均线周期')
+
+
+class MA55MA144CrossoverStrategy(MA20MA55CrossoverStrategy):
+    """MA55/144 golden cross targets long and death cross reverses short."""
+    params = (('fast_period', 55), ('slow_period', 144))
+    validate_params = classmethod(_validate_55_144_periods)
+
+    @classmethod
+    def required_bars(cls, params):
+        return max(int(params.get(key, getattr(cls.params, key))) for key in ('fast_period', 'slow_period')) + 1
+
+
+class MA55MA144LongOnlyStrategy(MA20MA55LongOnlyStrategy):
+    """MA55/144 golden cross opens long; death cross closes it."""
+    params = (('fast_period', 55), ('slow_period', 144))
+    validate_params = classmethod(_validate_55_144_periods)
+
+
+class MA55MA144ShortOnlyStrategy(MA20MA55ShortOnlyStrategy):
+    """MA55/144 death cross opens short; golden cross closes it."""
+    params = (('fast_period', 55), ('slow_period', 144))
+    validate_params = classmethod(_validate_55_144_periods)
+
+
 class StockMA20MA55LongOnlyStrategy(BaseStrategy):
     """
     20/55双均线多头策略 (仅做多)

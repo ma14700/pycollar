@@ -1,5 +1,17 @@
 import test from 'node:test';
 
+test('55/144 strategies retain their independent defaults and fixed sizing',()=>{
+    for(const name of ['MA55MA144CrossoverStrategy','MA55MA144LongOnlyStrategy','MA55MA144ShortOnlyStrategy']) {
+        const defaults=defaultStrategyParameters(name);
+        assert.equal(defaults.fast_period,55); assert.equal(defaults.slow_period,144);
+        const params=buildStrategyParameters(name,{...defaults,fixed_size:3,size_mode:'equity_percent'});
+        assert.equal(params.fast_period,55); assert.equal(params.slow_period,144);
+        assert.equal(params.size_mode,'fixed'); assert.equal(params.fixed_size,3);
+        assert.throws(()=>buildStrategyParameters(name,{...defaults,fast_period:55.5}),/均线周期/);
+        assert.throws(()=>buildStrategyParameters(name,{...defaults,fast_period:144}),/均线周期/);
+    }
+});
+
 test('execution controls default to zero and preserve explicitly saved positive offsets',()=>{
     const name='MA20MA55CrossoverStrategy';
     const defaults=defaultStrategyParameters(name);
