@@ -102,8 +102,24 @@ class HistoryTests(unittest.TestCase):
 
     def test_blocking_handlers_are_threadpool_routes(self):
         for handler in (main.scan_strategy, main.save_backtest_result, main.list_backtests,
-                        main.get_backtest_detail, main.delete_backtest):
+                        main.get_backtest_detail, main.delete_backtest, main.get_strategy_code):
             self.assertFalse(inspect.iscoroutinefunction(handler))
+
+    def test_strategy_code_and_dkx_exports_remain_available(self):
+        from core import strategy
+        for symbol in ('DKX', 'DKXStrategy', 'DKXFixedTPSLStrategy', 'DKXPartialTakeProfitStrategy'):
+            self.assertTrue(hasattr(strategy, symbol))
+        payload = main.get_strategy_code()
+        self.assertEqual(payload['module'], 'strategy.py')
+        self.assertIn('TrendFollowingStrategy', payload['code'])
+        dkx_payload = main.get_strategy_code('strategy_dkx.py')
+        self.assertEqual(dkx_payload['module'], 'strategy_dkx.py')
+        self.assertIn('class DKXStrategy', dkx_payload['code'])
+        self.assertIn('class DKXFixedTPSLStrategy', dkx_payload['code'])
+        self.assertTrue(any(item['key'] == 'strategy_dkx.py' for item in dkx_payload['modules']))
+        with self.assertRaises(HTTPException) as raised:
+            main.get_strategy_code('../main.py')
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_database_failure_rolls_back(self):
         request = main.SaveBacktestRequest(symbol='JM0', period='daily', strategy_name='test',

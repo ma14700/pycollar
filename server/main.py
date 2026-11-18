@@ -338,12 +338,9 @@ def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str
         }
     except HTTPException:
         raise
-    except HTTPException:
-        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        print(f"Error fetching quote: {e}")
+    except Exception:
         raise internal_error('行情读取失败，请稍后重试') from None
 
 @app.post("/api/backtest")
@@ -426,14 +423,31 @@ def run_backtest(request: BacktestRequest):
         
     return response
 
+STRATEGY_CODE_MODULES = (
+    ('strategy.py', '主策略模块 (strategy.py)'),
+    ('strategy_dkx.py', 'DKX 多空线策略 (strategy_dkx.py)'),
+    ('strategy_rr3.py', '20/55 ATR 盈亏比策略 (strategy_rr3.py)'),
+    ('strategy_base.py', '策略基类 (strategy_base.py)'),
+    ('ma5_55_cross.py', '5/55 均线交叉策略 (ma5_55_cross.py)'),
+    ('ma20_60_cross.py', '20/60 均线交叉策略 (ma20_60_cross.py)'),
+)
+_STRATEGY_MODULE_FILES = {key for key, _ in STRATEGY_CODE_MODULES}
+
+
 @app.get("/api/strategy/code")
-async def get_strategy_code():
+def get_strategy_code(module: str = 'strategy.py'):
+    if module not in _STRATEGY_MODULE_FILES:
+        raise HTTPException(status_code=400, detail='不支持的策略模块')
     try:
-        strategy_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core", "strategy.py")
+        strategy_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core", module)
         with open(strategy_path, "r", encoding="utf-8") as f:
             code = f.read()
-        return {"code": code}
-    except Exception as e:
+        return {
+            "module": module,
+            "code": code,
+            "modules": [{"key": key, "label": label} for key, label in STRATEGY_CODE_MODULES],
+        }
+    except Exception:
         raise internal_error('策略代码读取失败，请稍后重试') from None
 
 class SaveBacktestRequest(BaseModel):
@@ -474,9 +488,8 @@ def save_backtest_result(request: SaveBacktestRequest, db: Session = Depends(get
         db.commit()
         db.refresh(record)
         return {"status": "success", "id": record.id}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Save error: {e}")
         raise internal_error('回测保存失败，请稍后重试') from None
 
 @app.get("/api/backtest/list")
@@ -484,8 +497,7 @@ def list_backtests(db: Session = Depends(get_db)):
     try:
         records = summary_query(db).order_by(desc(BacktestRecord.timestamp), desc(BacktestRecord.id)).all()
         return [summary(record) for record in records]
-    except Exception as e:
-        print(f"List error: {e}")
+    except Exception:
         raise internal_error('历史记录读取失败，请稍后重试') from None
 
 @app.get('/api/backtest/history')
@@ -533,8 +545,7 @@ def get_backtest_detail(record_id: int, db: Session = Depends(get_db)):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"Detail error: {e}")
+    except Exception:
         raise internal_error('回测详情读取失败，请稍后重试') from None
 
 @app.delete("/api/backtest/{record_id}")
@@ -548,9 +559,8 @@ def delete_backtest(record_id: int, db: Session = Depends(get_db)):
         return {"status": "success", "message": "Record deleted"}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Delete error: {e}")
         raise internal_error('回测删除失败，请稍后重试') from None
 
 class BatchAnalyzeRequest(BaseModel):

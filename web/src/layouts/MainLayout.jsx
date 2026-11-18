@@ -109,7 +109,7 @@ const MainLayout = () => {
                         { key: '1', icon: <LineChartOutlined />, label: '策略回测' },
                         { key: '5', icon: <BulbOutlined />, label: '明日策略' },
                         { key: '8', icon: <ScanOutlined />, label: '品种扫描' },
-                        { key: '2', icon: <CodeOutlined />, label: '代码编辑' },
+                        { key: '2', icon: <CodeOutlined />, label: '策略代码' },
                         { key: '3', icon: <FileTextOutlined />, label: '交易日志' },
                         { key: '4', icon: <HistoryOutlined />, label: '回测记录' },
                         { key: '6', icon: <FundViewOutlined />, label: 'K线对比' },
