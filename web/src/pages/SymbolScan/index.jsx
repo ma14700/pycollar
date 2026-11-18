@@ -1,233 +1,178 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Form, Input, Select, Button, Row, Col, message, Table, Modal, Tag, Radio, Switch, Tooltip, DatePicker } from 'antd';
-import { PlayCircleOutlined, LineChartOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { Alert, Card, Form, InputNumber, Select, Button, Row, Col, message, Table, Modal, Tag, Switch, Space } from 'antd';
+import { PlayCircleOutlined, LineChartOutlined } from '@ant-design/icons';
 import axios from '../../utils/api.js';
 import ChartPanel from '../../components/ChartPanel';
+import DataProviderSelect from '../../components/DataProviderSelect';
+import DataSourceInfo from '../../components/DataSourceInfo';
 import PointExitInputs from '../../components/PointExitInputs';
 import { defaultAnalysisSymbols } from '../../utils/tradingDefaults';
 import { getMA144ExitStrategy, ma144ExitStrategyOptions } from '../../utils/ma144ExitStrategies';
+import { tomorrowStrategyOptions, getTomorrowDetailRequest } from '../../utils/tomorrowStrategy';
 
 const { Option } = Select;
+const price = value => Number.isFinite(value) ? value.toFixed(2) : '—';
+const periods = { daily: '日线', weekly: '周线', 60: '60分钟', 30: '30分钟', 15: '15分钟', 5: '5分钟' };
+const providers = { tqsdk: '天勤', gm: '掘金量化', akshare: '原有行情' };
+const statusLabels = {
+    filled: ['success', '已模拟成交'], partial_fill: ['processing', '部分成交'],
+    pending: ['processing', '待成交'], margin: ['error', '保证金不足'],
+    rejected: ['error', '已拒绝'], canceled: ['default', '已取消'], expired: ['default', '已过期'],
+};
+const signalColumns = [
+    { title: '动作 / 状态', width: 192, render: (_, signal) => {
+        const [color, label] = statusLabels[signal.status];
+        return <Space size={4} wrap><strong>{signal.action}</strong><Tag color={color}>{label}</Tag></Space>;
+    } },
+    { title: '触发时间（K线）', width: 180, render: (_, signal) => <>
+        {signal.signal_time}<br /><small>{signal.offset === 1 ? '最新一根' : `前 ${signal.offset - 1} 根`}</small>
+    </> },
+    { title: '触发价', width: 105, render: (_, signal) => <>{price(signal.signal_price)} <small>{signal.trigger_basis}</small></> },
+    { title: '模拟成交', width: 174, render: (_, signal) => signal.fill_time ? <>{price(signal.fill_price)}<br /><small>{signal.fill_time}</small></> : '—' },
+];
 
 const SymbolScan = () => {
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState([]);
+    const [scanConfig, setScanConfig] = useState(null);
+    const [signalsOnly, setSignalsOnly] = useState(false);
     const [futuresList, setFuturesList] = useState([]);
     const [stockList, setStockList] = useState([]);
-    const [symbols, setSymbols] = useState([]);
     const [form] = Form.useForm();
     const [strategyType, setStrategyType] = useState('TrendFollowingStrategy');
     const [detailVisible, setDetailVisible] = useState(false);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailResult, setDetailResult] = useState(null);
     const [currentDetailSymbol, setCurrentDetailSymbol] = useState(null);
+    const [detailError, setDetailError] = useState(null);
+    const detailRequestId = useRef(0);
+    const market = Form.useWatch('market_type', form) || 'futures';
+    const symbols = market === 'stock' ? stockList : futuresList;
+    const currentProvider = Form.useWatch('data_provider', form);
+    const defaults = tomorrowStrategyOptions.find(option => option.value === strategyType)?.defaults;
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [futuresRes, stockRes] = await Promise.all([
-                    axios.get('/api/symbols?market_type=futures'),
-                    axios.get('/api/symbols?market_type=stock')
-                ]);
-                const fList = futuresRes.data.futures || [];
-                const sList = stockRes.data.stocks || [];
-                setFuturesList(fList);
-                setStockList(sList);
-
-                // Initialize
-                setSymbols(fList);
-                form.setFieldsValue({
-                    market_type: 'futures',
-                    period: 'daily',
-                    strategy_name: 'TrendFollowingStrategy',
-                    symbols: defaultAnalysisSymbols(fList),
-                    scan_window: 5,
-                    fixed_size: 20,
-                    margin_rate: 0.12
-                });
-            } catch (err) {
-                console.error(err);
-                message.error('无法连接到后端服务');
+        const controller = new AbortController();
+        const options = { signal: controller.signal };
+        axios.get('/api/symbols?market_type=futures', options).then(({ data }) => {
+            const entries = data.futures || [];
+            setFuturesList(entries);
+            if (form.getFieldValue('market_type') === 'futures' && !form.isFieldTouched('symbols')) {
+                form.setFieldsValue({ symbols: defaultAnalysisSymbols(entries) });
             }
-        };
-        fetchData();
-    }, []);
+        }).catch(error => { if (!axios.isCancel(error)) message.error('加载期货品种失败'); });
+        axios.get('/api/symbols?market_type=stock', options)
+            .then(({ data }) => setStockList(data.stocks || []))
+            .catch(error => { if (!axios.isCancel(error)) message.warning('加载股票品种失败'); });
+        return () => controller.abort();
+    }, [form]);
 
-    const handleMarketChange = (val) => {
-        const list = val === 'stock' ? stockList : futuresList;
-        setSymbols(list || []);
-        form.setFieldsValue({ symbols: val === 'futures' ? defaultAnalysisSymbols(list || [], 0) : [] });
+    const handleMarketChange = val => {
+        form.setFieldsValue({
+            symbols: val === 'futures' ? defaultAnalysisSymbols(futuresList, 0) : [],
+            data_provider: val === 'stock' ? 'akshare' : 'tqsdk', data_source: 'main',
+        });
     };
 
-    const onFinish = async (values) => {
+    const onFinish = async values => {
         setLoading(true);
         try {
-            // Merge form values into params
-            let params = { ...values };
-            delete params.symbols;
-            delete params.market_type;
-            delete params.period;
-            delete params.strategy_name;
-            delete params.scan_window;
-            Object.assign(params, getMA144ExitStrategy(values.strategy_name)?.defaults);
-
+            const { symbols, period, market_type, strategy_name, scan_window, data_provider, data_source, synthesize_60, ...params } = values;
+            const strategy = tomorrowStrategyOptions.find(option => option.value === strategy_name);
+            const strategyParams = { fixed_size: 20, margin_rate: 0.12, ...strategy?.defaults };
+            for (const key of [...Object.keys(strategy?.defaults || {}), 'entry_delay_bars', 'exit_delay_bars']) {
+                if (params[key] != null) strategyParams[key] = params[key];
+            }
+            Object.assign(strategyParams, getMA144ExitStrategy(strategy_name)?.defaults);
             const payload = {
-                symbols: values.symbols,
-                period: values.period,
-                market_type: values.market_type,
-                strategy_name: values.strategy_name,
-                scan_window: parseInt(values.scan_window),
-                strategy_params: params
+                symbols, period, market_type, strategy_name, scan_window, data_provider,
+                data_source: market_type === 'futures' && data_provider !== 'akshare' ? data_source : 'main',
+                synthesize_60: period === '60' && synthesize_60, strategy_params: strategyParams,
             };
-
-            const res = await axios.post('/api/strategy/scan', payload);
-            setResults(res.data.results || []);
-            message.success('扫描完成');
+            const { data } = await axios.post('/api/strategy/scan', payload);
+            const rows = data.results || [];
+            setResults(rows);
+            setScanConfig(payload);
+            setSignalsOnly(false);
+            const incomplete = rows.filter(row => row.status !== 'ok').length;
+            if (incomplete) message.warning(`扫描完成，${incomplete} 个品种失败或历史不足`);
+            else message.success('扫描完成');
         } catch (err) {
-            console.error(err);
-            message.error('扫描失败: ' + (err.response?.data?.detail || err.message));
+            const detail = err.response?.data?.detail;
+            message.error('扫描失败：' + (typeof detail === 'string' ? detail : err.message));
         } finally {
             setLoading(false);
         }
     };
 
-    const showDetail = async (record) => {
+    const showDetail = async record => {
+        const requestId = ++detailRequestId.current;
         setDetailVisible(true);
         setDetailLoading(true);
         setCurrentDetailSymbol(record.symbol);
         setDetailResult(null);
-
+        setDetailError(null);
         try {
-            const values = form.getFieldsValue();
-            let params = { ...values };
-            delete params.symbols;
-            delete params.market_type;
-            delete params.period;
-            delete params.strategy_name;
-            delete params.scan_window;
-            Object.assign(params, getMA144ExitStrategy(values.strategy_name)?.defaults);
-
-            const payload = {
-                symbol: record.symbol,
-                period: values.period,
-                market_type: values.market_type,
-                strategy_name: values.strategy_name,
-                strategy_params: {
-                    ...params,
-                    disable_auto_close: true // 告诉后端不要在最后自动平仓
-                },
-                initial_cash: 10000000,
-                auto_optimize: false,
-                data_source: 'main',
-                start_date: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-            };
-
-            // 修正参数类型，确保数值类型正确传递
-            if (payload.strategy_params.fixed_size) payload.strategy_params.fixed_size = parseInt(payload.strategy_params.fixed_size);
-            if (payload.strategy_params.margin_rate) payload.strategy_params.margin_rate = parseFloat(payload.strategy_params.margin_rate);
-
-            // 确保日期范围合法，如果 start_date 是未来时间或不合理，可能会导致后端报错
-            // 这里使用最近 365 天是安全的
-
-            const res = await axios.post('/api/backtest', payload);
-            setDetailResult(res.data);
+            const { data } = await axios.post('/api/strategy/detail', getTomorrowDetailRequest(record));
+            if (requestId === detailRequestId.current) setDetailResult(data);
         } catch (err) {
-            console.error(err);
-            message.error('加载详情失败');
+            if (requestId === detailRequestId.current) setDetailError(err.response?.data?.detail || err.message);
         } finally {
-            setDetailLoading(false);
+            if (requestId === detailRequestId.current) setDetailLoading(false);
         }
     };
 
+    const signalCount = results.filter(row => row.raw_signals?.length).length;
+    const failedCount = results.filter(row => row.status === 'error').length;
+    const insufficientCount = results.filter(row => row.status === 'insufficient_history').length;
+    const latestTime = row => row.raw_signals?.[0]?.signal_time || '';
+    const visibleRows = results
+        .filter(row => !signalsOnly || row.raw_signals?.length)
+        .sort((first, second) => latestTime(second).localeCompare(latestTime(first)));
+    const latestColumns = signalColumns.map(column => ({
+        ...column, render: (_, row) => row.raw_signals?.length ? column.render(null, row.raw_signals[0]) : '—',
+    }));
     const columns = [
-        { title: '品种代码', dataIndex: 'symbol', key: 'symbol', width: 100 },
-        {
-            title: '交易品种',
-            dataIndex: 'symbol',
-            key: 'variety_name',
-            width: 120,
-            render: (text) => {
-                const item = futuresList.find(f => f.code === text) || stockList.find(s => s.code === text);
-                return item ? item.name : text;
-            }
-        },
-        {
-            title: 'K线信号',
-            dataIndex: 'raw_signals',
-            key: 'signal_info',
-            width: 200,
-            render: (signals) => {
-                if (!signals || signals.length === 0) return <Tag color="default">暂无机会</Tag>;
-                return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {signals.map((sig, idx) => (
-                            <div key={idx} style={{ display: 'flex', alignItems: 'center', height: '24px' }}>
-                                <Tag color={sig.action.includes('买') || sig.action.includes('多') ? 'red' : 'green'} style={{ marginRight: 8 }}>
-                                    {sig.action}
-                                </Tag>
-                                <span>
-                                    {sig.offset === 1 ? '当前K线' : `前${sig.offset-1}根`}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                );
-            }
-        },
-        {
-            title: '信号价格',
-            dataIndex: 'raw_signals',
-            key: 'signal_price',
-            width: 100,
-            render: (signals) => {
-                if (!signals || signals.length === 0) return '-';
-                return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {signals.map((sig, idx) => (
-                            <div key={idx} style={{ height: '24px', display: 'flex', alignItems: 'center' }}>
-                                <span style={{
-                                    fontWeight: 'bold',
-                                    color: sig.action.includes('买') || sig.action.includes('多') ? '#f5222d' : '#52c41a'
-                                }}>
-                                    {sig.price.toFixed(2)}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                );
-            }
-        },
-        {
-            title: '当前价格',
-            dataIndex: 'current_price',
-            key: 'current_price',
-            width: 100,
-            render: (price) => price ? <span style={{ color: '#1890ff', fontWeight: 'bold' }}>{price.toFixed(2)}</span> : '-'
-        },
-        {
-            title: '操作',
-            key: 'action',
-            width: 80,
-            render: (_, record) => (
-                <Button type="link" size="small" icon={<LineChartOutlined />} onClick={() => showDetail(record)}>
-                    详情
-                </Button>
-            ),
-        },
+        { title: '品种', dataIndex: 'symbol', width: 130, render: symbol => {
+            const item = futuresList.find(entry => entry.code === symbol) || stockList.find(entry => entry.code === symbol);
+            return <><strong>{item?.name || symbol}</strong>{item && <><br /><small>{symbol}</small></>}</>;
+        } },
+        { title: '扫描状态', width: 150, render: (_, row) => {
+            if (row.status === 'error') return <><Tag color="error">扫描失败</Tag><div>{row.error}</div></>;
+            if (row.status === 'insufficient_history') return <><Tag color="warning">历史不足</Tag>
+                <div>{row.error || `可判断 ${row.available_bars} 根 / 请求 ${scanConfig.scan_window} 根`}</div></>;
+            return row.raw_signals?.length ? <Tag color="blue">{row.raw_signals.length} 条信号</Tag> : <Tag>无信号</Tag>;
+        } },
+        ...latestColumns,
+        { title: '最新K线收盘价', width: 165, render: (_, row) => <>{price(row.current_price)}
+            {row.data_info?.end && <><br /><small>{row.data_info.end}</small></>}</> },
+        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button type="link" size="small"
+            disabled={!row.analysis_request} icon={<LineChartOutlined />} onClick={() => showDetail(row)}>详情</Button> },
     ];
 
     return (
-        <div style={{ padding: 24, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <Row gutter={24} style={{ flex: 1, overflow: 'hidden' }}>
-                <Col span={6} style={{ height: '100%', overflowY: 'auto' }}>
-                    <Card title="扫描配置" bordered={false} style={{ height: '100%' }}>
-                        <Form form={form} layout="vertical" onFinish={onFinish}>
+        <div style={{ padding: 20 }}>
+            <Row gutter={[16, 16]} align="top">
+                <Col xs={24} xl={6} style={{ minWidth: 0 }}>
+                    <Card title="扫描配置" bordered={false}>
+                        <Form form={form} layout="vertical" onFinish={onFinish} disabled={loading} initialValues={{
+                            market_type: 'futures', period: 'daily', strategy_name: 'TrendFollowingStrategy',
+                            data_provider: 'tqsdk', data_source: 'main', scan_window: 5,
+                            fast_period: 10, slow_period: 30, entry_delay_bars: 0, exit_delay_bars: 0,
+                        }}>
                             <Form.Item name="market_type" label="市场类型">
                                 <Select onChange={handleMarketChange}>
                                     <Option value="futures">期货</Option>
                                     <Option value="stock">股票</Option>
                                 </Select>
                             </Form.Item>
+
+                            <DataProviderSelect form={form} />
+                            {market === 'futures' && currentProvider !== 'akshare' && (
+                                <Form.Item name="data_source" label="合约口径">
+                                    <Select options={[{ value: 'main', label: '主力连续' }, { value: 'weighted', label: '加权指数' }]} />
+                                </Form.Item>
+                            )}
 
                             <Form.Item
                                 name="symbols"
@@ -257,26 +202,7 @@ const SymbolScan = () => {
                             <Form.Item name="strategy_name" label="策略选择">
                                 <Select onChange={(val) => {
                                     setStrategyType(val);
-                                    if (val === 'MA20MA55PointExitStrategy') form.setFieldsValue({ fast_period: 20, slow_period: 55, take_profit_points: 100, stop_loss_points: 50 });
-                                    const ma144ExitStrategy = getMA144ExitStrategy(val);
-                                    if (ma144ExitStrategy) {
-                                        form.setFieldsValue({ ...ma144ExitStrategy.defaults, size_mode: 'fixed', fixed_size: 20 });
-                                    }
-                                    if (['MA20MA55LongOnlyStrategy', 'MA20MA55ShortOnlyStrategy'].includes(val)) {
-                                        form.setFieldsValue({ fast_period: 20, slow_period: 55, size_mode: 'fixed', fixed_size: 20 });
-                                    }
-                                    if (val.includes('MA55')) {
-                                        form.setFieldsValue({ ma_period: 55 });
-                                    }
-                                    if (val === 'MA20MA55RiskRewardStrategy') {
-                                        form.setFieldsValue({
-                                            fast_period: 20,
-                                            slow_period: 55,
-                                            risk_reward_ratio: 2.0,
-                                            atr_period: 14,
-                                            atr_multiplier: 2.0
-                                        });
-                                    }
+                                    form.setFieldsValue(tomorrowStrategyOptions.find(option => option.value === val)?.defaults || {});
                                 }}>
                                     <Option value="MA55BreakoutStrategy">MA55突破+背离离场</Option>
                                     <Option value="MA55TouchExitStrategy">MA55突破+触碰平仓</Option>
@@ -310,52 +236,60 @@ const SymbolScan = () => {
                             <Form.Item
                                 name="scan_window"
                                 label="扫描K线数 (N)"
-                                tooltip="检测最近 N 根 K 线内是否存在开仓信号"
+                                tooltip="按触发时所在 K 线筛选开仓、反手、加减仓和平仓；成交可能在后续 K 线。"
                                 rules={[
                                     { required: true, message: '请输入扫描根数' },
-                                    { pattern: /^[1-9]\d*$/, message: '请输入正整数' }
+                                    { type: 'integer', min: 1, max: 10000, message: '请输入 1 到 10000 的整数' }
                                 ]}
                             >
-                                <Input type="number" suffix="根" />
+                                <InputNumber min={1} max={10000} precision={0} style={{ width: '100%' }} />
                             </Form.Item>
 
                             {strategyType === 'MA20MA55PointExitStrategy' && <PointExitInputs />}
-                            {/* Dynamic Strategy Params */}
                             {getMA144ExitStrategy(strategyType) ? (
                                 <p>{getMA144ExitStrategy(strategyType).reverses ? '固定 MA20 / MA144，金叉平空开多、死叉平多开空，按固定手数反手。' : '固定 MA20 / MA144，反向交叉离场，不加仓、不直接反手。'}</p>
-                            ) : strategyType === 'MA20MA55PointExitStrategy' || strategyType === 'TrendFollowingStrategy' || strategyType === 'DualMAFixedTPSLStrategy' ? (
+                            ) : defaults?.fast_period ? (
                                 <>
                                     <Row gutter={16}>
                                         <Col span={12}>
-                                            <Form.Item name="fast_period" label="快线" initialValue={10}>
-                                                <Input type="number" />
+                                            <Form.Item name="fast_period" label="快线">
+                                                <InputNumber min={1} precision={0} style={{ width: '100%' }} />
                                             </Form.Item>
                                         </Col>
                                         <Col span={12}>
-                                            <Form.Item name="slow_period" label="慢线" initialValue={30}>
-                                                <Input type="number" />
+                                            <Form.Item name="slow_period" label="慢线">
+                                                <InputNumber min={1} precision={0} style={{ width: '100%' }} />
                                             </Form.Item>
                                         </Col>
                                     </Row>
                                 </>
-                            ) : (strategyType === 'DKXStrategy' || strategyType === 'DKXPartialTakeProfitStrategy' || strategyType === 'DKXFixedTPSLStrategy') ? (
+                            ) : defaults?.dkx_period ? (
                                 <Row gutter={16}>
                                     <Col span={12}>
                                         <Form.Item name="dkx_period" label="DKX周期" initialValue={20}>
-                                            <Input type="number" />
+                                            <InputNumber min={1} precision={0} style={{ width: '100%' }} />
                                         </Form.Item>
                                     </Col>
                                     <Col span={12}>
                                         <Form.Item name="dkx_ma_period" label="均线周期" initialValue={10}>
-                                            <Input type="number" />
+                                            <InputNumber min={1} precision={0} style={{ width: '100%' }} />
                                         </Form.Item>
                                     </Col>
                                 </Row>
                             ) : (
                                 <Form.Item name="ma_period" label="MA周期" initialValue={55}>
-                                    <Input type="number" />
+                                    <InputNumber min={1} precision={0} style={{ width: '100%' }} />
                                 </Form.Item>
                             )}
+                            <Row gutter={12}>
+                                {[['entry_delay_bars', '开仓 K 线'], ['exit_delay_bars', '平仓 K 线']].map(([name, label]) => (
+                                    <Col span={12} key={name}>
+                                        <Form.Item name={name} label={label} tooltip="0 表示下一根开盘；正整数表示触发后第 N 根开盘">
+                                            <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                                        </Form.Item>
+                                    </Col>
+                                ))}
+                            </Row>
 
                             <Form.Item>
                                 <Button type="primary" htmlType="submit" loading={loading} block icon={<PlayCircleOutlined />}>
@@ -366,14 +300,35 @@ const SymbolScan = () => {
                     </Card>
                 </Col>
 
-                <Col span={18} style={{ height: '100%', overflowY: 'auto' }}>
-                    <Card title="扫描结果" bordered={false} style={{ minHeight: '100%' }}>
+                <Col xs={24} xl={18} style={{ minWidth: 0 }}>
+                    <Card title="扫描结果" bordered={false}>
+                        {scanConfig && <Space direction="vertical" size={8} style={{ display: 'flex', marginBottom: 16 }}>
+                            <div>
+                                {tomorrowStrategyOptions.find(option => option.value === scanConfig.strategy_name)?.label}
+                                {' · '}{periods[scanConfig.period]}{' · '}{providers[scanConfig.data_provider]}
+                                {scanConfig.market_type === 'futures' && (scanConfig.data_source === 'weighted' ? ' / 加权指数' : ' / 主力连续')}
+                                {scanConfig.synthesize_60 && ' · 交易时段合成'}{' · '}最近 {scanConfig.scan_window} 根
+                            </div>
+                            <Space wrap>
+                                <Tag>扫描 {results.length} 个</Tag><Tag color="blue">有信号 {signalCount} 个</Tag>
+                                <Tag color="gold">历史不足 {insufficientCount} 个</Tag><Tag color="red">失败 {failedCount} 个</Tag>
+                                <Switch checked={signalsOnly} onChange={setSignalsOnly} size="small" aria-label="只看有信号" />只看有信号
+                            </Space>
+                        </Space>}
                         <Table
                             columns={columns}
-                            dataSource={results}
+                            dataSource={visibleRows}
                             rowKey="symbol"
                             loading={loading}
-                            pagination={false}
+                            size="small"
+                            scroll={{ x: 1240 }}
+                            pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: [15, 30, 60] }}
+                            locale={{ emptyText: !scanConfig ? '选择品种和策略后开始扫描' : '没有符合筛选条件的结果' }}
+                            expandable={{
+                                rowExpandable: row => row.raw_signals?.length > 1,
+                                expandedRowRender: row => <Table size="small" columns={signalColumns} rowKey="ref"
+                                    dataSource={row.raw_signals} pagination={false} />,
+                            }}
                         />
                     </Card>
                 </Col>
@@ -382,16 +337,18 @@ const SymbolScan = () => {
             <Modal
                 title={`策略详情 - ${currentDetailSymbol}`}
                 open={detailVisible}
-                onCancel={() => setDetailVisible(false)}
-                width={1000}
+                onCancel={() => { detailRequestId.current += 1; setDetailVisible(false); }}
+                width="min(1100px, 96vw)"
                 footer={null}
                 style={{ top: 20 }}
             >
                 {detailLoading ? (
                     <div style={{ textAlign: 'center', padding: '50px' }}>加载中...</div>
-                ) : (
-                    <ChartPanel results={detailResult} chartType="kline" height={600} />
-                )}
+                ) : detailError ? <Alert type="error" showIcon message="加载详情失败" description={detailError} />
+                    : detailResult && <>
+                        <DataSourceInfo info={detailResult.data_info} />
+                        <ChartPanel results={detailResult} chartType="kline" height={600} />
+                    </>}
             </Modal>
         </div>
     );

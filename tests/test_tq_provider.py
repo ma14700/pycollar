@@ -95,6 +95,19 @@ class TqProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '免费滚动窗口'):
                 tq.fetch_tq_data('RB0', 'daily', '2020-01-01', '2020-01-31')
 
+    def test_weighted_backtest_uses_tq_index_prices_and_preserves_source(self):
+        dates = pd.bdate_range('2025-01-02', periods=100).astype(str)
+        prices = [100 + i / 10 for i in range(100)]
+        with patch.object(tq, 'run_worker', return_value={'bars': bars(dates, prices)}) as worker, \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = engine.BacktestEngine().run('JM0', 'daily', {'fixed_size': 1, 'print_log': False},
+                strategy_name='MA20MA55CrossoverStrategy', data_provider='tqsdk', data_source='weighted')
+        self.assertNotIn('error', result)
+        self.assertEqual(worker.call_args.args[0]['symbol'], 'KQ.i@DCE.jm')
+        self.assertEqual(result['data_info']['resolved_symbol'], 'KQ.i@DCE.jm')
+        self.assertEqual(result['data_info']['data_source'], 'weighted')
+        self.assertEqual(result['kline_data']['values'][-1][1], prices[-1])
+
     def test_routing_does_not_call_legacy_on_tq_failure(self):
         with patch.object(tq, 'fetch_tq_data', side_effect=ValueError('account missing')) as new, patch.object(data_loader, 'fetch_futures_data') as old:
             with self.assertRaises(ValueError):

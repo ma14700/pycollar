@@ -11,6 +11,7 @@ from .result_window import result_window, timestamp
 from .constants import get_multiplier
 from .contract_backtest import contract_scope
 from .execution_delay import SignalDelayBroker, execution_delay_params
+from .symbol_scan import ScanBroker
 from .daily_macd import align_daily_macd
 from .accounting import (configure_accounting, closed_trade_stats, equity_statistics,
                          AccountEquity, COMMISSION_RATE, METRICS_VERSION)
@@ -33,7 +34,7 @@ class BacktestEngine:
     def _filter_params(self, StrategyClass, params):
         return filter_strategy_params(StrategyClass, params)
 
-    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None, daily_history_start=None, synthesize_60=False):
+    def run(self, symbol, period, strategy_params, initial_cash=1000000.0, start_date=None, end_date=None, strategy_name='TrendFollowingStrategy', market_type='futures', data_source='main', data_provider='akshare', as_of=None, history_start=None, contract_month=None, daily_history_start=None, synthesize_60=False, scan_window=None):
         strategy_params = strategy_params.copy()
         contract_info = None
         try:
@@ -67,7 +68,8 @@ class BacktestEngine:
         LoggingStrategy = make_logging_strategy(StrategyClass, start_date, market_type)
 
         cerebro = bt.Cerebro()
-        cerebro.setbroker(SignalDelayBroker(**delay_params))
+        broker_class = ScanBroker if scan_window is not None else SignalDelayBroker
+        cerebro.setbroker(broker_class(**delay_params))
         try:
             configure_accounting(cerebro.broker, strategy_params, market_type)
         except (ValueError, TypeError) as error:
@@ -118,10 +120,13 @@ class BacktestEngine:
                 if contract_info:
                     df_raw = df_raw.loc[df_raw.index < pd.Timestamp(end_date) + pd.Timedelta(days=1)].copy()
                 if as_of:
-                    df_raw = df_raw.loc[df_raw.index <= pd.to_datetime(as_of)].copy()
+                    last_bar = pd.to_datetime(as_of)
+                    df_raw = df_raw.loc[df_raw.index <= last_bar].copy()
+                    if df_raw.empty or df_raw.index.max() != last_bar:
+                        raise ValueError('分析时的最后一根 K 线已不在当前行情中，请重新分析')
                 if history_start and not df_raw.empty:
                     first_bar = pd.to_datetime(history_start)
-                    if df_raw.index.min() > first_bar:
+                    if first_bar not in df_raw.index:
                         raise ValueError('分析时的历史起点已超出当前行情窗口，请重新分析后查看详情')
                     df_raw = df_raw.loc[df_raw.index >= first_bar].copy()
             
@@ -130,8 +135,9 @@ class BacktestEngine:
                 req_start = pd.to_datetime(start_date)
                 data_start = df_raw.index.min()
                 if data_start > req_start + pd.Timedelta(days=5): # 放宽到5天
-                    if data_provider == 'tqsdk' and not (contract_info and df_raw.attrs.get('data_info', {}).get('history_complete')):
-                        raise ValueError(f'天勤免费滚动窗口无法覆盖所选开始日期 {start_date}，当前最早数据为 {data_start}。请缩短范围或清空日期使用近期窗口。')
+                    if data_provider in ('tqsdk', 'gm') and not (contract_info and df_raw.attrs.get('data_info', {}).get('history_complete')):
+                        label = '天勤免费滚动窗口' if data_provider == 'tqsdk' else '掘金可用行情'
+                        raise ValueError(f'{label}无法覆盖所选开始日期 {start_date}，当前最早数据为 {data_start}。请缩短范围或清空日期使用近期窗口。')
                     data_warning = (f"【合约行情】{symbol} 的完整可用历史始于 {data_start.strftime('%Y-%m-%d')}，所选月份范围按实际行情回测。"
                                     if contract_info and df_raw.attrs.get('data_info', {}).get('history_complete') else
                                     f"【数据警告】数据源限制: 只能获取到 {data_start.strftime('%Y-%m-%d')} 之后的数据 (请求开始: {start_date})。免费接口通常仅提供最近约1000根K线(分钟级)。")
@@ -155,7 +161,8 @@ class BacktestEngine:
         if callable(history_requirement):
             required_bars = history_requirement(strategy_params)
             if len(df_raw) < required_bars:
-                return {"error": f"该策略至少需要 {required_bars} 根已完成 K 线用于均线与交叉确认，当前仅有 {len(df_raw)} 根，请扩大数据范围或更换周期"}
+                return {"error": f"该策略至少需要 {required_bars} 根已完成 K 线用于均线与交叉确认，当前仅有 {len(df_raw)} 根，请扩大数据范围或更换周期",
+                        **({'status': 'insufficient_history'} if scan_window is not None else {})}
             
         if strategy_name == 'MA20MA60DailyMACDStrategy' and period != 'daily':
             try:
@@ -223,15 +230,39 @@ class BacktestEngine:
         cerebro.broker.setcash(initial_cash)
         
         # 4. 添加分析器
-        cerebro.addanalyzer(AccountEquity, _name='account_equity')
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+        if scan_window is None:
+            cerebro.addanalyzer(AccountEquity, _name='account_equity')
+            cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
         # 5. 运行
-        results = cerebro.run(tradehistory=True)
+        results = cerebro.run(tradehistory=True, runonce=not strategy_params.get('disable_auto_close', False))
         if not results:
             return {"error": "回测未产生结果"}
             
         strat = results[0]
+
+        execution_info = {"history_start": str(df_raw.index.min()), **options}
+        visible = df_raw.index
+        if start is not None:
+            visible = visible[visible >= start]
+        if end is not None:
+            visible = visible[visible < end + pd.Timedelta(days=1)]
+        data_info = {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
+                     "provider_name": {'tqsdk': '天勤 TqSdk 免费版', 'gm': '掘金量化'}.get(data_provider, '原有行情'),
+                     "symbol": symbol, "data_source": data_source, "period": period,
+                     "contract_month": contract_month, "bars": len(visible),
+                     "start": str(visible.min()), "end": str(visible.max())}
+        if scan_window is not None:
+            first_bar = max(len(df_raw) - len(visible) + 1, strat._minperiod)
+            available = max(0, len(df_raw) - first_bar + 1)
+            signals = cerebro.broker.scan_events(df_raw.index, first_bar, scan_window)
+            return {
+                'status': 'insufficient_history' if available < scan_window else 'ok',
+                'available_bars': available, 'raw_signals': signals,
+                'current_price': float(df_raw['Close'].iloc[-1]),
+                'strategy_info': {'name': strategy_name, 'params': filtered_params},
+                'execution_info': execution_info, 'data_info': data_info,
+            }
         
         # 如果有数据警告，插入到日志头部
         if data_warning:
@@ -272,19 +303,7 @@ class BacktestEngine:
         # 构建前端可视窗口数据（切片到用户请求的范围）
         df_kline = df_raw.copy()
         
-        # 重新构建 mask
-        range_mask = pd.Series(True, index=df_kline.index)
-        
-        start_dt_ts = pd.to_datetime(start_date) if start_date else None
-        end_dt_ts = (pd.to_datetime(end_date) + pd.Timedelta(days=1)) if end_date else None
-        
-        if start_dt_ts:
-            range_mask = range_mask & (df_kline.index >= start_dt_ts)
-        if end_dt_ts:
-            range_mask = range_mask & (df_kline.index < end_dt_ts)
-            
-        final_mask = range_mask
-        df_kline = df_kline[final_mask]
+        df_kline = df_kline.loc[visible]
 
         if not isinstance(df_kline.index, pd.DatetimeIndex):
              # 尝试将索引转换为 datetime，或者使用 date 列
@@ -427,7 +446,7 @@ class BacktestEngine:
             "status": "success",
             "contract_info": contract_info,
             "strategy_info": {"name": strategy_name, "params": filtered_params},
-            "execution_info": {"history_start": str(df_raw.index.min()), **options},
+            "execution_info": execution_info,
             "pending_orders": [{"date": df_raw.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
                                 "type": "buy" if order.isbuy() else "sell",
                                 "size": float(order.created.size)}
@@ -440,11 +459,7 @@ class BacktestEngine:
                 "hold_bars": len(strat) - strat.position_entry_bar if strat.position.size and strat.position_entry_bar is not None else 0,
                 "profit_points": (float(df_raw['Close'].iloc[-1]) - strat.position.price) * (1 if strat.position.size > 0 else -1) if strat.position.size else "-",
             },
-            "data_info": {**df_raw.attrs.get('data_info', {}), "provider": data_provider,
-                          "provider_name": '天勤 TqSdk 免费版' if data_provider == 'tqsdk' else '原有行情',
-                          "symbol": symbol, "data_source": data_source, "period": period,
-                          "contract_month": contract_month,
-                          "bars": len(df_kline), "start": str(df_kline.index.min()), "end": str(df_kline.index.max())},
+            "data_info": data_info,
             "equity_curve": final_equity_curve,
             "kline_data": kline_data,
             "trades": final_trades,
@@ -482,19 +497,24 @@ class BacktestEngine:
 
     def analyze_detail(self, symbol, period, strategy_params, strategy_name='TrendFollowingStrategy',
                        market_type='futures', data_provider='akshare', data_source='main',
-                       start_date=None, as_of=None, history_start=None, daily_history_start=None, synthesize_60=False):
+                       start_date=None, as_of=None, history_start=None, daily_history_start=None, synthesize_60=False,
+                       scan_window=None):
         """Use the backtest executor without liquidating a live strategy at the data boundary."""
         params = strategy_params.copy()
         params['disable_auto_close'] = True
         params.setdefault('print_log', False)
         params.setdefault('contract_multiplier', get_multiplier(symbol) if market_type == 'futures' else 1)
-        if start_date is None and data_provider != 'tqsdk':
+        if start_date is None and data_provider not in ('tqsdk', 'gm'):
             days = 1095 if period == 'weekly' else 365
+            if scan_window is not None:
+                days = max(days, scan_window * (7 if period == 'weekly' else 2))
             start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
         result = self.run(symbol=symbol, period=period, strategy_params=params,
                           initial_cash=10000000.0, start_date=start_date,
                           strategy_name=strategy_name, market_type=market_type,
-                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start, daily_history_start=daily_history_start, synthesize_60=synthesize_60)
+                          data_provider=data_provider, data_source=data_source, as_of=as_of, history_start=history_start,
+                          daily_history_start=daily_history_start, synthesize_60=synthesize_60,
+                          **({'scan_window': scan_window} if scan_window is not None else {}))
         if 'error' not in result:
             result['analysis_request'] = {
                 'symbol': symbol, 'period': period, 'market_type': market_type,
@@ -529,259 +549,23 @@ class BacktestEngine:
                                 'direction': 'Error', 'entry_price': '-', 'profit_points': '-'})
         return results
 
-    def scan_signals(self, symbols, period, scan_window, strategy_params, strategy_name='TrendFollowingStrategy', market_type='futures'):
-        """
-        扫描最近 N 根 K 线的开仓信号
-        """
-
-        if not hasattr(strategy, strategy_name):
-             if hasattr(strategy, 'TrendFollowingStrategy'):
-                 strategy_name = 'TrendFollowingStrategy'
-             else:
-                 return {"error": f"Strategy '{strategy_name}' not found."}
-
-        StrategyClass = getattr(strategy, strategy_name)
-
-        class ScanStrategy(StrategyClass):
-            def __init__(self):
-                self.signals = []
-                self.last_pos_size = 0
-                self.order_creation = {} # 记录订单创建时的 bar index
-                self.order_creation_size = {} # 记录订单创建时的持仓状态
-                super().__init__()
-
-            def notify_order(self, order):
-                if order.status == order.Submitted:
-                    # 记录订单创建时间 (当前已处理的 Bar 数量)
-                    self.order_creation[order.ref] = len(self)
-                    # 记录订单创建时的持仓状态
-                    self.order_creation_size[order.ref] = self.position.size
-
-                if order.status == order.Completed:
-                    # 判断开平仓逻辑
-                    # 注意：notify_order 调用时，self.position 可能已经更新
-                    # 但为了准确判断，我们记录上一次的持仓大小
-
-                    current_size = self.position.size
-                    executed_size = order.executed.size # 带符号? backtrader order.executed.size 通常是正数，通过 isbuy/issell 判断方向?
-                    # 不，order.executed.size 是绝对值。order.size 是带符号的。
-
-                    # 简单判定：
-                    # 如果成交后持仓绝对值增加，或者持仓方向改变，则视为"开仓"性质
-                    # 如果成交后持仓绝对值减小且同向，视为"平仓"
-
-                    is_entry = False
-                    action = ""
-
-                    # 以前的 size
-                    prev_size = self.last_pos_size
-
-                    if order.isbuy():
-                        # 买入
-                        if prev_size >= 0:
-                            is_entry = True # 加仓或开仓
-                            action = "买入开仓" if prev_size == 0 else "买入加仓"
-                        else:
-                            # 原持有空单
-                            if current_size >= 0:
-                                # 反手或平空后翻多
-                                is_entry = True # 翻多视为开仓
-                                action = "反手做多"
-                            else:
-                                is_entry = False # 平空
-                                action = "买入平空"
-                    else:
-                        # 卖出
-                        if prev_size <= 0:
-                            is_entry = True # 加空或开空
-                            action = "卖出开仓" if prev_size == 0 else "卖出加空"
-                        else:
-                            # 原持有多单
-                            if current_size <= 0:
-                                is_entry = True
-                                action = "反手做空"
-                            else:
-                                is_entry = False
-                                action = "卖出平多"
-
-                    # 更新记录的持仓
-                    self.last_pos_size = current_size
-
-                    if is_entry:
-                        dt = self.datas[0].datetime.datetime(0)
-                        # 记录 Bar 索引 (负数表示倒数第几根)
-                        # len(self) 是当前处理的 K 线总数
-                        # 我们在 run 之后会知道总长度 TotalLen
-                        # 这里先记录 index = len(self)
-                        self.signals.append({
-                            "date": dt.strftime('%Y-%m-%d'),
-                            "action": action,
-                            "price": order.executed.price,
-                            "bar_index": len(self)
-                        })
-
-                super().notify_order(order)
-
-            def stop(self):
-                # 检查未成交订单 (Pending Orders)，捕获最新K线产生的信号
-                # 仅保留最近一根K线产生的订单
-                last_bar_idx = len(self)
-
-                for order in self.broker.orders:
-                    if order.status in [order.Submitted, order.Accepted]:
-                        # 检查订单创建时间
-                        # 只有在最后一根 K 线（或非常接近末尾）生成的订单才被视为"新信号"
-                        creation_idx = self.order_creation.get(order.ref, 0)
-
-                        # 如果订单是很久以前创建的（比如 limit 单），忽略它
-                        # last_bar_idx 是当前 total_bars
-                        # 我们不再强制要求 creation_idx == last_bar_idx，而是交给外部的 scan_window 过滤
-                        # 但是，如果 creation_idx 确实太早了（比如 100 根之前），那确实应该忽略，避免数据量过大
-                        # 不过 scan_window 最大可能也就几百？
-                        # 安全起见，我们还是记录下来，让 scan_signals 函数去过滤
-
-                        # 计算 ago (倒数第几根)
-                        ago = last_bar_idx - creation_idx
-
-                        # 获取订单创建时的日期
-                        # 注意：self.datas[0].datetime 是当前(结束时)的时间轴
-                        # 我们可以通过 ago 来回溯
-                        # date(-ago)
-                        try:
-                            # ago = 0 means current bar (last_bar_idx)
-                            # date(0) is the date of last_bar_idx
-                            dt_date = self.datas[0].datetime.date(-ago)
-                            dt_str = dt_date.strftime('%Y-%m-%d')
-                        except IndexError:
-                            logger.warning("Scan order creation index is outside the loaded data")
-                            # Fallback to current date if out of bounds (should not happen if data is loaded)
-                            dt_str = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d')
-
-                        is_entry = False
-                        action = ""
-                        # 使用订单创建时的持仓状态来判断，而不是当前持仓状态
-                        # 这样可以避免历史持仓对当前信号判断的干扰
-                        creation_size = self.order_creation_size.get(order.ref, self.position.size)
-
-                        if order.isbuy():
-                             if creation_size >= 0:
-                                 action = "买入开仓" if creation_size == 0 else "买入加仓"
-                                 is_entry = True
-                             elif creation_size < 0:
-                                 action = "反手做多"
-                                 is_entry = True
-                        else:
-                             if creation_size <= 0:
-                                 action = "卖出开仓" if creation_size == 0 else "卖出加空"
-                                 is_entry = True
-                             elif creation_size > 0:
-                                 action = "反手做空"
-                                 is_entry = True
-
-                        if is_entry:
-                             # 价格处理
-                             price = order.created.price
-                             if order.exectype == bt.Order.Market or price is None or price == 0:
-                                 price = self.datas[0].close[0]
-
-                             self.signals.append({
-                                 "date": dt_str,
-                                 "action": action + "(信号)",
-                                 "price": price,
-                                 "bar_index": creation_idx # 使用创建时的 index
-                             })
-
-                if hasattr(super(), 'stop'):
-                    super().stop()
-
+    def scan_signals(self, symbols, period, scan_window, strategy_params, strategy_name='TrendFollowingStrategy',
+                     market_type='futures', data_provider='akshare', data_source='main', synthesize_60=False):
         results = []
-
-        # Handle optimal_entry
-        options = execution_options(strategy_params)
-        use_optimal_entry = options['optimal_entry']
-
-        # 强制禁用自动平仓，避免产生虚假信号
-        strategy_params['disable_auto_close'] = True
-
-        filtered_strategy_params = self._filter_params(StrategyClass, strategy_params)
-
-        # 足够的数据以覆盖扫描窗口和指标预热
-        # 假设 N=100, 预热=100 -> 200天
-        # 默认取 365 天比较稳妥
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=max(365, scan_window * 2))).strftime('%Y-%m-%d')
-
-        for symbol in symbols:
+        for symbol in dict.fromkeys(symbols):
             try:
-                df = fetch_data(symbol, period, start_date=start_date, end_date=None, market_type=market_type)
-                if df is not None:
-                    df.columns = [c.lower() for c in df.columns]
-
-                if df is None or df.empty:
-                    continue
-
-                total_bars = len(df)
-
-                cerebro = bt.Cerebro()
-                cerebro.setbroker(SignalDelayBroker(**execution_delay_params(strategy_params)))
-                cerebro.check = False
-                if use_optimal_entry:
-                    cerebro.broker.set_coo(True)
-                cerebro.broker.setcash(10000000.0)
-                configure_accounting(cerebro.broker, strategy_params, market_type)
-
-                data = bt.feeds.PandasData(dataname=df)
-                cerebro.adddata(data)
-
-                cerebro.addstrategy(ScanStrategy, **filtered_strategy_params)
-                strats = cerebro.run()
-                if not strats:
-                    continue
-
-                strat = strats[0]
-
-                # 筛选最近 scan_window 内的信号
-                # 这里的 bar_index 是基于 1-based (len(self))
-
-                valid_signals = []
-                seen_dates = set()
-
-                # 倒序遍历，优先处理最新的信号
-                for sig in sorted(strat.signals, key=lambda x: x['bar_index'], reverse=True):
-                    offset = total_bars - sig['bar_index'] + 1
-
-                    if offset <= scan_window:
-                        # 同一日期只保留一个信号（通常是成交信号或最新的挂单信号）
-                        if sig['date'] in seen_dates:
-                            continue
-
-                        valid_signals.append({
-                            "date": sig['date'],
-                            "action": sig['action'],
-                            "offset": offset,
-                            "price": sig['price']
-                        })
-                        seen_dates.add(sig['date'])
-
-                # 重新排序回正序（前端展示需要）
-                valid_signals.sort(key=lambda x: x['offset'], reverse=True)
-
-                # 获取当前价格
-                current_price = df['close'].iloc[-1] if not df.empty else 0.0
-
-                results.append({
-                    "symbol": symbol,
-                    "name": symbol,
-                    "signal_text": "有" if valid_signals else "无",
-                    "raw_signals": valid_signals,
-                    "current_price": current_price
-                })
-
-            except Exception as e:
+                result = self.analyze_detail(
+                    symbol, period, strategy_params, strategy_name, market_type, data_provider, data_source,
+                    synthesize_60=synthesize_60, scan_window=scan_window,
+                )
+                if 'error' in result:
+                    results.append({'symbol': symbol, 'status': result.get('status', 'error'), 'error': result['error']})
+                else:
+                    results.append({'symbol': symbol, **{key: result[key] for key in (
+                        'status', 'available_bars', 'raw_signals', 'current_price', 'data_info', 'analysis_request',
+                    )}})
+            except Exception:
                 logger.exception("Signal scan failed for %s", symbol)
-                results.append({
-                    "symbol": symbol,
-                    "error": "信号扫描失败，请检查参数或查看后端日志"
-                })
-        
+                results.append({'symbol': symbol, 'status': 'error', 'error': '信号扫描失败，请检查参数或查看后端日志'})
         return results
 

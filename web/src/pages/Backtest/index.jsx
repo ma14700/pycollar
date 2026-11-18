@@ -70,6 +70,8 @@ const BacktestPage = () => {
   const [stockList, setStockList] = useState([]);
   const selectedProducts = Form.useWatch('symbol', form);
   const selectedMarket = Form.useWatch('market_type', form) || 'futures';
+  const selectedProvider = Form.useWatch('data_provider', form) || (selectedMarket === 'stock' ? 'akshare' : 'tqsdk');
+  const selectedSource = Form.useWatch('data_source', form) || 'main';
   const contractMonths = normalizeContractMonths(Form.useWatch('contract_month', form));
   const contractMode = selectedMarket === 'futures' && contractMonths.length > 0;
   const singleProduct = Array.isArray(selectedProducts) && selectedProducts.length === 1 ? selectedProducts[0] : null;
@@ -396,9 +398,14 @@ const BacktestPage = () => {
                 >
                     <Select disabled={selectedMarket === 'stock' || contractMode} onChange={(value) => fetchQuote(form.getFieldValue('symbol'), { data_source: value })}>
                     <Option value="main">{contractMode ? '具体合约' : '主力连续'}</Option>
-                    <Option value="weighted">加权指数</Option>
+                    <Option value="weighted">{selectedProvider === 'tqsdk' ? '加权指数（天勤）' : '加权指数'}</Option>
                     </Select>
                 </Form.Item>
+
+                {selectedMarket === 'futures' && selectedProvider === 'tqsdk' && selectedSource === 'weighted' && !contractMode &&
+                    <Alert type="info" showIcon style={{ marginBottom: 16 }}
+                        message="天勤加权指数回测"
+                        description="采用各在市合约昨持仓量加权的品种指数。该指数不可直接交易，收益为按指数价格模拟的结果；选择具体合约会切换为该合约行情。" />}
 
 
                 <Form.Item name="initial_cash" label="初始资金">

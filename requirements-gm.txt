@@ -1,0 +1,3 @@
+# Install separately, because the GM SDK has its own dependency constraints.
+gm==3.0.193
+six==1.17.0

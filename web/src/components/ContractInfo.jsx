@@ -18,6 +18,7 @@ const ContractInfo = ({ form, quoteInfo }) => {
     return (
         <div style={{ background: '#fafafa', padding: '12px', borderRadius: '6px', marginBottom: '24px', border: '1px solid #f0f0f0' }}>
             <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>合约详情参考 ({quoteInfo.date})</div>
+            {quoteInfo.price_basis && <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>{quoteInfo.price_basis}</div>}
             <Row gutter={[8, 8]}>
                 <Col span={12}>
                     <div style={{ fontSize: '12px', color: '#666' }}>一手保证金（参考）</div>

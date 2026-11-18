@@ -23,6 +23,7 @@ from core.history import history_page, summary_query, summary
 from core.optimizer import StrategyOptimizer
 from core.constants import get_multiplier, FUTURES_MULTIPLIERS, FUTURES_NAMES
 from core.tq_provider import provider_status, fetch_tq_quote, fetch_tq_contracts, tq_symbol
+from core.gm_provider import provider_status as gm_provider_status, fetch_gm_quote
 from core.market_cache import MarketCache, ResourceValue
 from core.contract_backtest import contract_scope
 from core.candle_compare import compare_market_candles
@@ -67,14 +68,14 @@ class BacktestRequest(BaseModel):
     end_date: Optional[str] = None   # 结束时间 (YYYY-MM-DD)
     strategy_name: str = "TrendFollowingStrategy"
     data_source: str = "main" # 数据来源: main (主力), weighted (加权/指数)
-    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'akshare'
     contract_month: Optional[str] = Field(default=None, pattern=r'^\d{2}(0[1-9]|1[0-2])$')
     synthesize_60: bool = False
 
 
 @app.get('/api/data/providers')
 def get_data_providers():
-    return {"tqsdk": provider_status()}
+    return {"tqsdk": provider_status(), "gm": gm_provider_status()}
 
 
 @app.get('/api/futures/contracts')
@@ -108,7 +109,7 @@ def market_quotes(refresh: bool = False):
 class CandleCompareRequest(BaseModel):
     symbol: str = Field(min_length=2, max_length=24)
     period: Literal['daily', '1', '5', '15', '30', '60'] = 'daily'
-    data_provider: Literal['akshare', 'tqsdk'] = 'tqsdk'
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'tqsdk'
     data_source: Literal['main', 'weighted'] = 'main'
     window_size: int = Field(default=50, ge=10, le=500)
     top_k: int = Field(default=5, ge=1, le=20)
@@ -124,7 +125,7 @@ class CandleCompareRequest(BaseModel):
 class CrossProbabilityRequest(BaseModel):
     symbol: str = Field(min_length=2, max_length=24)
     period: Literal['daily', '1', '5', '15', '30', '60'] = 'daily'
-    data_provider: Literal['akshare', 'tqsdk'] = 'tqsdk'
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'tqsdk'
     data_source: Literal['main', 'weighted'] = 'main'
     pairs: List[Literal['20/55', '20/144', '55/144']] = Field(min_length=1, max_length=3)
     observation_bars: Optional[int] = Field(default=None, strict=True, ge=1, le=10000)
@@ -247,12 +248,15 @@ def get_symbols(market_type: str = 'futures'):
                                    ttl=86400 if market_type == 'futures' else 21600)
 
 @app.get("/api/quote/latest")
-def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str = 'main', data_provider: Literal['akshare', 'tqsdk'] = 'akshare'):
+def get_latest_quote(symbol: str, market_type: str = 'futures', data_source: str = 'main', data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'akshare'):
     try:
         if data_provider == 'tqsdk':
             if market_type != 'futures':
                 raise ValueError('天勤免费版在本平台仅支持期货')
             return fetch_tq_quote(symbol, data_source)
+        if data_provider == 'gm':
+            if market_type != 'futures': raise ValueError('掘金数据源目前仅支持期货')
+            return fetch_gm_quote(symbol, data_source)
         if market_type == 'stock':
              # 股票日线 (使用最近一年的数据以加快速度)
              start_dt = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y%m%d")
@@ -555,7 +559,7 @@ class BatchAnalyzeRequest(BaseModel):
     market_type: str = "futures"
     strategy_params: Dict[str, Any]
     strategy_name: str = "TrendFollowingStrategy"
-    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'akshare'
     data_source: Literal['main', 'weighted'] = 'main'
     synthesize_60: bool = False
 
@@ -580,7 +584,7 @@ class StrategyDetailRequest(BaseModel):
     strategy_name: str
     strategy_params: Dict[str, Any]
     market_type: Literal['futures', 'stock'] = 'futures'
-    data_provider: Literal['akshare', 'tqsdk'] = 'akshare'
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'akshare'
     data_source: Literal['main', 'weighted'] = 'main'
     start_date: Optional[str] = None
     as_of: Optional[str] = None
@@ -598,25 +602,19 @@ def strategy_detail(request: StrategyDetailRequest):
 
 
 class ScanRequest(BaseModel):
-    symbols: List[str]
-    period: str
-    scan_window: int
-    market_type: str = "futures"
+    symbols: List[str] = Field(min_length=1)
+    period: Literal['1', '5', '15', '30', '60', 'daily', 'weekly']
+    scan_window: int = Field(ge=1, le=10000)
+    market_type: Literal['futures', 'stock'] = 'futures'
     strategy_params: Dict[str, Any]
     strategy_name: str = "TrendFollowingStrategy"
+    data_provider: Literal['akshare', 'tqsdk', 'gm'] = 'akshare'
+    data_source: Literal['main', 'weighted'] = 'main'
+    synthesize_60: bool = False
 
 @app.post("/api/strategy/scan")
 def scan_strategy(request: ScanRequest):
-    engine = BacktestEngine()
-    results = engine.scan_signals(
-        symbols=request.symbols,
-        period=request.period,
-        scan_window=request.scan_window,
-        strategy_params=request.strategy_params,
-        strategy_name=request.strategy_name,
-        market_type=request.market_type
-    )
-    return {"results": results}
+    return {"results": BacktestEngine().scan_signals(**request.model_dump())}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

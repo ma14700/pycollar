@@ -132,6 +132,11 @@ def fetch_data(symbol, period='5', market_type='futures', start_date=None, end_d
             return fetch_tq_data(symbol, period, start_date, end_date, data_source,
                                  cache_contract=True, required_start_date=required_start_date)
         return fetch_tq_data(symbol, period, start_date, end_date, data_source)
+    if data_provider == 'gm':
+        if market_type != 'futures':
+            raise ValueError('掘金数据源目前仅支持期货')
+        from .gm_provider import fetch_gm_data
+        return fetch_gm_data(symbol, period, start_date, end_date, data_source, required_start_date)
     if data_provider != 'akshare':
         raise ValueError('不支持的行情供应商')
     if market_type == 'stock':
